@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+.DS_Store
+
+# Raw scrapes and live draft logs are environment-specific.
+data/raw/*
+!data/raw/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Generated from the YAML configs by `ffdraft export-r`. Regenerate rather
+# than edit, so the Python engine and the ffanalytics pull cannot drift.
+R/generated/

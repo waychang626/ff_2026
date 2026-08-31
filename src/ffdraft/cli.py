@@ -1,0 +1,496 @@
+"""Command line interface, including the live draft console.
+
+The console is the thing you actually sit in front of on draft day. It does
+the two jobs the LLM would otherwise do - resolve messy names, refuse
+ambiguous ones - without needing an API key or a network, and it writes the
+pick log the brief asks for as a side effect of being used.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import sys
+from pathlib import Path
+
+import numpy as np
+
+from .audit import AuditLog
+from .baselines import explain as explain_baselines
+from .board import Board, ProjectionUpdate
+from .config import ConfigError, LeagueConfig, load_by_id
+from .data import DEFAULT_POOL, build_board_for, default_paths
+from .draft import DraftState, DraftStateError
+from .engine import _recommend
+from .ids import POSITIONS
+from .replay import DraftLog, assert_deterministic, backtest, load_actuals, replay
+from .scoring import to_r_scoring_rules
+from .vor import replacement_points, vor_array
+
+
+def _load(args) -> tuple[LeagueConfig, Board]:
+    config = load_by_id(args.league)
+    if getattr(args, "seat", None):
+        config = dataclasses.replace(config, my_seat=args.seat)
+    if getattr(args, "sims", None):
+        config = dataclasses.replace(
+            config, sim=dataclasses.replace(config.sim, n_sims=args.sims)
+        )
+    proj, market = default_paths(getattr(args, "season", 2026))
+    if getattr(args, "projections", None):
+        proj = Path(args.projections)
+    if getattr(args, "market", None):
+        market = Path(args.market)
+    if not Path(proj).exists():
+        raise SystemExit(
+            f"no projections at {proj}\n"
+            f"  run the pull:  Rscript R/pull_projections.R --season {getattr(args,'season',2026)}\n"
+            f"  or point at a file:  --projections <path>\n"
+            f"  or try the synthetic board:  --projections data/samples/projections_synthetic.csv"
+        )
+    board = build_board_for(config, proj, market, pool_size=getattr(args, "pool", DEFAULT_POOL))
+    return config, board
+
+
+# --- commands ----------------------------------------------------------------
+def cmd_baselines(args) -> int:
+    print(explain_baselines(load_by_id(args.league)))
+    return 0
+
+
+def cmd_export_r(args) -> int:
+    config = load_by_id(args.league)
+    code = to_r_scoring_rules(config.scoring, f"{config.league_id}_scoring")
+    header = (
+        f"# GENERATED from configs/leagues/{config.league_id}.yaml by "
+        f"`ffdraft export-r --league {config.league_id}`.\n"
+        f"# Do not edit by hand - edit the YAML and regenerate, so the Python\n"
+        f"# engine and the ffanalytics pull cannot drift apart.\n"
+    )
+    if args.out:
+        path = Path(args.out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(header + code)
+        print(f"wrote {path}")
+    else:
+        print(header + code, end="")
+    return 0
+
+
+def cmd_board(args) -> int:
+    config, board = _load(args)
+    available = np.ones(len(board), dtype=bool)
+    vor = vor_array(board, available, config.vor_baseline)
+    repl = replacement_points(board, available, config.vor_baseline)
+
+    idx = np.flatnonzero(
+        board.pos_mask(args.pos.upper()) if args.pos else np.ones(len(board), bool)
+    )
+    idx = idx[np.argsort(-vor[idx], kind="stable")][: args.top]
+
+    print(f"{config.name} - top {len(idx)} by VOR"
+          + (f" ({args.pos.upper()})" if args.pos else ""))
+    print("  replacement: " + "  ".join(f"{p}={repl[p]:.0f}" for p in POSITIONS))
+    print(f"\n  {'#':<4}{'player':<28}{'pos':<5}{'tm':<5}{'proj':>7}{'sd':>7}{'VOR':>8}{'ADP':>7}")
+    for rank, i in enumerate(idx, start=1):
+        player = board.players[i]
+        adp = f"{board.adp[i]:.0f}" + ("*" if board.adp_imputed[i] else "")
+        print(f"  {rank:<4}{player.name[:27]:<28}{player.pos:<5}{player.team:<5}"
+              f"{board.points[i]:7.1f}{board.sd[i]:7.1f}{vor[i]:8.1f}{adp:>7}")
+    if board.adp_imputed[idx].any():
+        print("\n  * ADP imputed from projection rank; survival for these is an estimate")
+    return 0
+
+
+def cmd_check(args) -> int:
+    """Pre-draft preflight. Run this the morning of, not five minutes before."""
+    config, board = _load(args)
+    problems, warnings = [], []
+
+    if config.my_seat is None:
+        problems.append("draft.my_seat is unset - set it in the config or pass --seat")
+    imputed = int(board.adp_imputed.sum())
+    if imputed > len(board) * 0.5:
+        warnings.append(f"{imputed}/{len(board)} players have no market ADP")
+    for pos in POSITIONS:
+        n = int(board.pos_mask(pos).sum())
+        need = config.vor_baseline[pos]
+        if n < need:
+            problems.append(f"only {n} {pos} on the board but replacement rank is {need}")
+    thin = [p for p in POSITIONS if int(board.pos_mask(p).sum()) < 3]
+    if thin:
+        warnings.append(f"very few players at {thin}")
+
+    print(f"league        {config.name} ({config.league_id})")
+    print(f"shape         {config.teams} teams, {config.rounds} rounds, "
+          f"{config.total_drafted} picks, {config.draft_type}")
+    print(f"seat          {config.my_seat}")
+    print(f"starters      {' '.join(config.roster.starters)}")
+    print(f"playoffs      {config.playoff_teams} of {config.teams}, weeks {list(config.playoff_weeks)}")
+    print(f"board         {len(board)} players  "
+          + " ".join(f"{p}:{int(board.pos_mask(p).sum())}" for p in POSITIONS))
+    print(f"baselines     {config.vor_baseline}")
+    print(f"sims          {config.sim.n_sims}, seed {config.sim.seed}")
+    print(f"fingerprints  league={config.fingerprint()} board={board.fingerprint()}")
+    for w in warnings:
+        print(f"  WARN  {w}")
+    for p in problems:
+        print(f"  FAIL  {p}")
+    print("\n" + ("READY" if not problems else "NOT READY"))
+    return 1 if problems else 0
+
+
+def cmd_replay(args) -> int:
+    config, board = _load(args)
+    log = DraftLog.load(args.log)
+    seat = args.seat or log.my_seat or config.my_seat
+    if args.check:
+        assert_deterministic(config, board, log, seat=seat, runs=args.runs, limit=args.limit)
+        print(f"deterministic across {args.runs} runs "
+              f"({args.limit or 'all'} picks for seat {seat})")
+        return 0
+    result = replay(config, board, log, seat=seat, limit=args.limit)
+    for advice in result.advices:
+        actual = log.picks[advice.pick_number - 1].player_id
+        top = advice.recommendations[0] if advice.recommendations else None
+        match = "==" if top and top.player_id == actual else "!="
+        print(f"pick {advice.pick_number:>4}  engine: {top.player_id if top else '-':<28}"
+              f" {match} actual: {actual}")
+    return 0
+
+
+def cmd_backtest(args) -> int:
+    config, board = _load(args)
+    log = DraftLog.load(args.log)
+    actuals = load_actuals(args.actuals)
+    result = backtest(config, board, log, actuals, seat=args.seat or log.my_seat)
+    print(f"seat {result.seat}")
+    print(f"  engine roster : {result.engine_points:8.1f} pts")
+    print(f"  actual roster : {result.actual_points:8.1f} pts")
+    print(f"  delta         : {result.delta:+8.1f} pts")
+    if result.missing_actuals:
+        print(f"  WARN {len(result.missing_actuals)} drafted players have no actuals "
+              f"and scored 0: {result.missing_actuals[:5]}")
+    print("\n  engine lineup:")
+    for slot, pid in result.engine_lineup.items():
+        name = board.player(pid).name if pid and pid in board.index else "-"
+        print(f"    {slot:<8}{name:<28}{actuals.get(pid, 0.0):8.1f}")
+    return 0
+
+
+# --- the live console --------------------------------------------------------
+HELP = """
+  <name>            record a pick by anyone   (e.g. "bijan gone", "lions d")
+  me <name>         record a pick as yours
+  go                get a recommendation for the pick on the clock
+  undo              take back the last pick
+  roster [seat]     show a roster
+  board [pos]       show the best available
+  out <name> : <r>  rule a player out for the season, with a reason
+  bump <name> <x> : <r>   multiply a player's projection by x
+  save [path]       write the pick log
+  help / quit
+"""
+
+
+def cmd_draft(args) -> int:
+    config, board = _load(args)
+    if config.my_seat is None:
+        raise SystemExit("set draft.my_seat in the config or pass --seat")
+
+    log = DraftLog(league_id=config.league_id, my_seat=config.my_seat)
+    audit = AuditLog(args.audit) if args.audit else AuditLog()
+    log_path = Path(args.out or f"logs/draft_{config.league_id}.jsonl")
+    state = DraftState(config=config, drafted=[], my_seat=config.my_seat)
+
+    print(f"{config.name} - seat {config.my_seat} of {config.teams}, "
+          f"{config.rounds} rounds, {config.sim.n_sims} sims/pick")
+    print(f"pick log -> {log_path}")
+    print(HELP)
+
+    while not state.is_complete:
+        prompt = (
+            f"[R{state.current_round} p{state.pick_number} "
+            f"{'YOU' if state.on_the_clock == config.my_seat else f'seat {state.on_the_clock}'}]> "
+        )
+        try:
+            line = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not line:
+            continue
+
+        try:
+            state, board, done = _handle(line, state, board, config, log, log_path, audit)
+            if done:
+                break
+        except (DraftStateError, ConfigError, KeyError, ValueError) as exc:
+            print(f"  ! {exc}")
+
+    log.save(log_path)
+    print(f"\nsaved {len(log.picks)} picks to {log_path}")
+    return 0
+
+
+def _handle(line, state, board, config, log, log_path, audit):
+    lower = line.lower()
+    if lower in ("quit", "exit", "q"):
+        return state, board, True
+    if lower in ("help", "?", "h"):
+        print(HELP)
+        return state, board, False
+    if lower == "save":
+        log.save(log_path)
+        print(f"  saved {len(log.picks)} picks to {log_path}")
+        return state, board, False
+    if lower == "undo":
+        if not log.picks:
+            print("  nothing to undo")
+            return state, board, False
+        removed = log.picks.pop()
+        state = state.undo()
+        print(f"  undid pick {removed.pick}: {removed.player_id}")
+        return state, board, False
+    if lower.startswith("roster"):
+        parts = line.split()
+        seat = int(parts[1]) if len(parts) > 1 else config.my_seat
+        _show_roster(board, state, seat, config)
+        return state, board, False
+    if lower.startswith("board"):
+        parts = line.split()
+        _show_available(board, state, config, parts[1].upper() if len(parts) > 1 else None)
+        return state, board, False
+    if lower in ("go", "rec", "."):
+        _recommend_now(config, board, state, audit)
+        return state, board, False
+    if lower.startswith("out ") or lower.startswith("bump "):
+        board = _apply_update(line, board, state, config, audit)
+        return state, board, False
+
+    # Otherwise: a pick.
+    mine = False
+    text = line
+    if lower.startswith("me "):
+        mine, text = True, line[3:]
+
+    resolution = board.resolver.resolve(text)
+    if not resolution.found:
+        print(f"  ! {resolution.note}")
+        return state, board, False
+    if resolution.ambiguous:
+        print(f"  ! {resolution.note}")
+        print("    say which one - add the position (e.g. 'josh QB') or type the full name")
+        return state, board, False
+
+    player = resolution.best
+    if player.player_id in state.drafted:
+        print(f"  ! {player.display} was already taken at pick "
+              f"{state.drafted.index(player.player_id) + 1}")
+        return state, board, False
+
+    seat = state.on_the_clock
+    if mine and seat != config.my_seat:
+        print(f"  ! seat {seat} is on the clock, not you (seat {config.my_seat})")
+        return state, board, False
+
+    pick_no = state.pick_number
+    state = state.record(player.player_id)
+    log.append(player.player_id, seat=seat)
+    print(f"  {pick_no}. seat {seat}: {player.display}")
+
+    if not state.is_complete and state.on_the_clock == config.my_seat:
+        print()
+        _recommend_now(config, board, state, audit)
+    return state, board, False
+
+
+def _recommend_now(config, board, state, audit) -> None:
+    if state.on_the_clock != config.my_seat:
+        print(f"  seat {state.on_the_clock} is on the clock; "
+              f"your next pick is {state.my_next_pick()}")
+        return
+    advice = _recommend(
+        config, board, list(state.drafted), state.my_roster, state.pick_number, audit=audit
+    )
+    print(advice.format_card())
+    print()
+    print(f"  {'#':<3}{'player':<28}{'VOR':>7}{'surv':>7}{'P(title)':>10}{'delta':>8}")
+    for rec in advice.recommendations[:3]:
+        surv = f"{rec.survival:.0%}" if rec.survival == rec.survival else "  -"
+        print(f"  {rec.rank:<3}{rec.display[:27]:<28}{rec.vor:7.1f}{surv:>7}"
+              f"{rec.p_title:10.2%}{rec.delta_p_title * 100:+8.2f}")
+    print()
+
+
+def _show_roster(board, state, seat, config) -> None:
+    from .lineup import lineup_slots
+
+    roster = state.roster_of(seat)
+    if not roster:
+        print(f"  seat {seat}: empty")
+        return
+    scores = {p: float(board.points[board.idx(p)]) for p in roster}
+    positions = {p: board.player(p).pos for p in roster}
+    starters = lineup_slots(scores, positions, config.roster)
+    started = {p for p in starters.values() if p}
+    print(f"  seat {seat} ({len(roster)} players)")
+    # Display in the order the league lists its starters, not the order the
+    # optimiser fills them - under a pick clock you read down the lineup card.
+    for slot in _display_order(config, starters):
+        pid = starters[slot]
+        name = board.player(pid).display if pid else "-"
+        print(f"    {slot:<8}{name}")
+    bench = [p for p in roster if p not in started]
+    if bench:
+        print(f"    bench   {', '.join(board.player(p).display for p in bench)}")
+
+
+def _display_order(config, starters: dict) -> list[str]:
+    order, counts = [], {}
+    for slot in config.roster.starters:
+        counts[slot] = counts.get(slot, 0) + 1
+        label = slot if config.roster.starters.count(slot) == 1 else f"{slot}{counts[slot]}"
+        if label in starters:
+            order.append(label)
+    return order + [s for s in starters if s not in order]
+
+
+def _show_available(board, state, config, pos=None) -> None:
+    available = np.ones(len(board), dtype=bool)
+    for pid in state.drafted:
+        available[board.idx(pid)] = False
+    vor = vor_array(board, available, config.vor_baseline)
+    idx = np.flatnonzero(available & (board.pos_mask(pos) if pos else True))
+    idx = idx[np.argsort(-vor[idx], kind="stable")][:12]
+    for rank, i in enumerate(idx, start=1):
+        print(f"  {rank:<3}{board.players[i].display[:34]:<36}"
+              f"VOR {vor[i]:7.1f}   ADP {board.adp[i]:5.0f}")
+
+
+def _apply_update(line, board, state, config, audit) -> Board:
+    """Brief job #3: new information enters through an explicit, logged tool."""
+    body, _, reason = line.partition(":")
+    parts = body.split()
+    kind = parts[0].lower()
+    multiplier = 1.0
+    if kind == "bump":
+        try:
+            multiplier = float(parts[-1])
+            name = " ".join(parts[1:-1])
+        except ValueError:
+            print("  ! usage: bump <name> <multiplier> : <reason>")
+            return board
+    else:
+        name = " ".join(parts[1:])
+
+    resolution = board.resolver.resolve(name)
+    if not resolution.found or resolution.ambiguous:
+        print(f"  ! {resolution.note or 'no match'}")
+        return board
+    reason = reason.strip()
+    if not reason:
+        print("  ! a reason is required - this goes in the audit log")
+        return board
+
+    update = ProjectionUpdate(
+        player_id=resolution.best.player_id,
+        out_for_season=(kind == "out"),
+        points_multiplier=multiplier,
+        reason=reason,
+        source="console",
+    )
+    board = board.apply_update(update)
+    audit.record(
+        state_hash=board.fingerprint(), league_id=config.league_id,
+        pick_number=state.pick_number, kind="projection_update",
+        payload={"update": update.describe()},
+    )
+    print(f"  applied: {update.describe()}")
+    return board
+
+
+def cmd_llm(args) -> int:
+    from .llm.orchestrator import run_console
+    from .llm.session import DraftSession
+
+    config, board = _load(args)
+    if config.my_seat is None:
+        raise SystemExit("set draft.my_seat in the config or pass --seat")
+    session = DraftSession(config, board, log_path=args.out)
+    return run_console(session, model=args.model)
+
+
+# --- wiring ------------------------------------------------------------------
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="ffdraft", description=__doc__)
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    def common(p, seat=True):
+        p.add_argument("--league", required=True)
+        p.add_argument("--projections")
+        p.add_argument("--market")
+        p.add_argument("--season", type=int, default=2026)
+        p.add_argument("--pool", type=int, default=DEFAULT_POOL)
+        p.add_argument("--sims", type=int)
+        if seat:
+            p.add_argument("--seat", type=int)
+
+    p = sub.add_parser("baselines", help="explain replacement level")
+    p.add_argument("--league", required=True)
+    p.set_defaults(func=cmd_baselines)
+
+    p = sub.add_parser("export-r", help="emit the ffanalytics scoring rules")
+    p.add_argument("--league", required=True)
+    p.add_argument("--out")
+    p.set_defaults(func=cmd_export_r)
+
+    p = sub.add_parser("board", help="show the board by VOR")
+    common(p)
+    p.add_argument("--pos")
+    p.add_argument("--top", type=int, default=25)
+    p.set_defaults(func=cmd_board)
+
+    p = sub.add_parser("check", help="pre-draft preflight")
+    common(p)
+    p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("draft", help="live draft console")
+    common(p)
+    p.add_argument("--out", help="where to write the pick log")
+    p.add_argument("--audit", help="where to write the audit log")
+    p.set_defaults(func=cmd_draft)
+
+    p = sub.add_parser("llm", help="draft console driven by Claude (needs the llm extra)")
+    common(p)
+    p.add_argument("--model", default="claude-opus-5")
+    p.add_argument("--out", help="where to write the pick log")
+    p.set_defaults(func=cmd_llm)
+
+    p = sub.add_parser("replay", help="replay a draft log through the engine")
+    common(p)
+    p.add_argument("--log", required=True)
+    p.add_argument("--check", action="store_true", help="assert determinism instead")
+    p.add_argument("--runs", type=int, default=2)
+    p.add_argument("--limit", type=int)
+    p.set_defaults(func=cmd_replay)
+
+    p = sub.add_parser("backtest", help="let the engine draft a seat and score it")
+    common(p)
+    p.add_argument("--log", required=True)
+    p.add_argument("--actuals", required=True)
+    p.set_defaults(func=cmd_backtest)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except (ConfigError, DraftStateError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

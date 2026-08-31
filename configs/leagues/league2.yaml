@@ -1,0 +1,151 @@
+# League 2 - 12 teams. Draft: Thu Sep 3.
+#
+# Starting slots were the one missing input in the project brief and are now
+# confirmed from the league settings page: QB, RB, RB, WR, WR, TE, W/R/T, K,
+# DEF, with 4 bench and 1 IR. That makes it a 13-round, 156-pick draft.
+#
+# Skill-position scoring is identical to League 1, so ONE projection set serves
+# both leagues. Every difference is in K and DST - the two positions being
+# punted anyway.
+
+league_id: league2
+name: "League 2 (12-team)"
+teams: 12
+
+draft:
+  type: snake
+  my_seat: null          # 1-indexed. Set this before the draft.
+  # Draft-pick trading is allowed in this league. The engine does not model
+  # trades: it optimises the picks you actually hold. If you trade picks
+  # mid-draft, the pick log still reflects reality, so recommendations stay
+  # correct - but the engine will not propose a trade.
+
+roster:
+  starters: [QB, RB, RB, WR, WR, TE, WRT, K, DEF]
+  bench: 4
+  ir: 1
+
+schedule:
+  regular_season_weeks: 14      # trade deadline is week 14, playoffs start 15
+  playoff_teams: 6
+  playoff_weeks: [15, 16, 17]   # 6 teams, 3 rounds: top 2 seeds get a bye
+
+scoring:
+  # Identical to League 1 at every skill position.
+  offense:
+    pass_yds: 0.04
+    pass_tds: 4
+    pass_int: -1
+    rush_yds: 0.1
+    rush_tds: 6
+    rec: 0.5
+    rec_yds: 0.1
+    rec_tds: 6
+    fumbles_lost: -2
+    two_pts: 2
+    return_tds: 6
+  kicking:
+    # DIFFERS FROM LEAGUE 1: every missed FG and PAT is -1 here, where League 1
+    # only penalises missed FGs under 20 yds and missed PATs. And a 60+ yarder
+    # pays 6, which League 1 has no bracket for.
+    xp: 1
+    xp_miss: -1
+    fg_miss: -1
+    fg_0019: 3
+    fg_2029: 3
+    fg_3039: 3
+    fg_4049: 4
+    fg_50: 5
+    fg_60: 6
+  dst:
+    dst_int: 2
+    dst_fum_rec: 2
+    dst_safety: 2
+    dst_sacks: 1
+    dst_td: 6
+    dst_blk: 2
+    # DIFFERS FROM LEAGUE 1: forced fumbles pay here.
+    # KNOWN COMPROMISE: ffanalytics has no forced-fumble projection field, so
+    # no source will populate dst_forced_fumble and it will score as 0. The
+    # rule is encoded so the config matches the league, but it cannot affect a
+    # ranking until a source provides the stat. It is worth roughly 12 points
+    # a season to a good defense - immaterial at a punted position.
+    dst_forced_fumble: 1
+  # Points-allowed brackets are identical across both leagues.
+  pts_bracket:
+    - {threshold: 0,  points: 10}
+    - {threshold: 6,  points: 7}
+    - {threshold: 13, points: 4}
+    - {threshold: 20, points: 1}
+    - {threshold: 27, points: 0}
+    - {threshold: 34, points: -1}
+    - {threshold: 99, points: -4}
+
+baselines:
+  # 9 starters x 12 teams = 108 slots.
+  # Fixed: 12 QB, 24 RB, 24 WR, 12 TE, 12 K, 12 DEF. The W/R/T adds 12 more.
+  # These are starter demand + 1, the same definition that reproduces every
+  # League 1 baseline except TE. Run `ffdraft baselines --league league2` to
+  # see the arithmetic.
+  #
+  # Replacement level here is MUCH lower than League 1's, exactly as the brief
+  # predicted: 156 players come off the board instead of 136, spread over 12
+  # rosters instead of 8. Near-identical scoring, materially different board.
+  explicit:
+    QB: 13
+    RB: 30
+    WR: 31
+    TE: 14
+    K: 13
+    DST: 13
+
+  # ASSUMPTION: with only two required WRs but half-PPR scoring, the single
+  # W/R/T flex is assumed to skew WR, with a real RB share and an occasional
+  # elite TE. Shifting this moves the RB and WR baselines a rank or two.
+  flex_shares:
+    WRT: {WR: 0.50, RB: 0.40, TE: 0.10}   # 12 slots -> 6 WR, 4.8 RB, 1.2 TE
+
+  bench_shares: {RB: 0.35, WR: 0.35, QB: 0.12, TE: 0.12, K: 0.03, DST: 0.03}
+
+calibration:
+  # Identical to League 1 - these are published, league-invariant figures.
+  aggregate: average
+  slopes: {QB: 0.67, TE: 0.72, RB: 0.79, WR: 0.85, K: 1.0, DST: 1.0}
+  optimism: {QB: 46.5, RB: 21.6, WR: 21.6, TE: 21.6, K: 0.0, DST: 0.0}
+  r_squared: {QB: 0.20, RB: 0.20, WR: 0.20, TE: 0.20, K: 0.20, DST: 0.20}
+  anchor_multiple: 1.5
+
+opponents:
+  # QB herding runs through roughly the first 20 picks. In a 12-team single-QB
+  # league that is under two rounds, so the QB run tends to come later than the
+  # window covers - the K and DST herding, which applies throughout, is doing
+  # most of the work here.
+  adp_noise_picks: 8.0
+  herding_multiplier: 2.5
+  herding_qb_pick_limit: 20
+  herding_positions: [QB, K, DST]
+  always_herd_positions: [K, DST]
+  reach_temperature: 1.0
+
+sim:
+  n_sims: 2500
+  seed: 20260903              # draft date; explicit so runs are reproducible
+  games: 17
+  candidate_pool: 12
+  weekly_cv: {QB: 0.35, RB: 0.55, WR: 0.60, TE: 0.65, K: 0.50, DST: 0.70}
+  injury_game_loss: {QB: 1.5, RB: 2.5, WR: 1.8, TE: 1.8, K: 0.3, DST: 0.0}
+
+policy:
+  # Only 13 rounds here, so League 1's floors of 15/14 would be unreachable.
+  # Both release at round 12, which is also where the mandatory-slot forcing
+  # takes over (two slots left to fill, two picks remaining).
+  min_round_k: 12
+  min_round_dst: 12
+
+notes:
+  - "Half the field makes the playoffs (6 of 12), which weakens the case for
+     regular-season dominance and tilts the objective toward ceiling."
+  - "Three playoff weeks with a 6-team field means the top two seeds get a bye,
+     so the value of the 1-2 seed is materially higher than in League 1."
+  - "Draft-pick trading is allowed and the trade deadline is week 14. Neither
+     is modelled; the engine optimises the picks you hold."

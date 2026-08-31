@@ -1,0 +1,174 @@
+# League 1 - "The Andrew M. Cuomo League" (Yahoo, league ID 50271)
+#
+# Two structural facts drive everything here (brief section 4):
+#   1. No TE slot. A tight end only plays by beating a flex-eligible RB/WR.
+#   2. Q/W/R/T is a superflex. With 4-pt passing TDs a second QB beats a
+#      flex-level WR, so assume all 8 teams start two QBs.
+# Eight teams also means replacement level is extremely high: only 136 players
+# are drafted, so VOR gaps compress at every position and the board tilts
+# toward raw talent and bust-avoidance over positional gymnastics.
+
+league_id: cuomo
+name: "The Andrew M. Cuomo League"
+platform: yahoo
+platform_league_id: "50271"
+teams: 8
+
+draft:
+  type: snake
+  pick_clock_seconds: 60
+  my_seat: null          # 1-indexed. Set this before the draft.
+
+roster:
+  starters: [QB, WR, WR, WR, RB, RB, WRT, WRT, QWRT, K, DEF]
+  bench: 6
+  ir: 2                  # IR slots are not drafted into.
+
+schedule:
+  # ASSUMPTION: weeks 1-15 regular season, 16-17 playoffs. The brief fixes the
+  # playoff weeks (16-17) and the field (4 of 8) but not where the regular
+  # season ends. Confirm on Yahoo before relying on P(playoffs).
+  regular_season_weeks: 15
+  playoff_teams: 4
+  playoff_weeks: [16, 17]
+
+# Half PPR, 4-pt passing TD. Identical to League 2 at every skill position -
+# one QB/RB/WR/TE projection set serves both leagues. All differences are in
+# K and DST, the two positions being punted anyway.
+scoring:
+  offense:
+    pass_yds: 0.04       # 25 yds/pt
+    pass_tds: 4
+    pass_int: -1         # overrides the ffanalytics default of -3
+    rush_yds: 0.1
+    rush_tds: 6
+    rec: 0.5             # half PPR; ffanalytics defaults to 0
+    rec_yds: 0.1
+    rec_tds: 6
+    fumbles_lost: -2     # overrides the ffanalytics default of -3
+    two_pts: 2
+    return_tds: 6
+  kicking:
+    xp: 1
+    fg_0019: 3
+    fg_2029: 3
+    fg_3039: 3
+    fg_4049: 4
+    fg_50: 5
+    # KNOWN COMPROMISE: this league only penalises missed FGs under 20 yds and
+    # missed PATs (-2 each). A single fg_miss field cannot express "under 20
+    # yds only", so it is set to 0 rather than over-penalising every miss.
+    fg_miss: 0
+  dst:
+    dst_int: 2
+    dst_fum_rec: 2
+    dst_safety: 2
+    dst_sacks: 1
+    dst_td: 6
+    dst_blk: 2
+    # KNOWN COMPROMISE: no forced-fumble field exists upstream. League 1 does
+    # not pay for it anyway, so nothing is lost here (League 2 does - see note).
+  pts_bracket:
+    - {threshold: 0,  points: 10}
+    - {threshold: 6,  points: 7}
+    - {threshold: 13, points: 4}
+    - {threshold: 20, points: 1}
+    - {threshold: 27, points: 0}
+    - {threshold: 34, points: -1}
+    - {threshold: 99, points: -4}
+
+baselines:
+  # Demand math (brief section 4): 11 starters x 8 teams = 88 slots.
+  # Fixed: 8 QB, 16 RB, 24 WR, 8 K, 8 DEF. Flex adds 24 more.
+  # These are the brief's stated numbers and are what the engine uses.
+  # `ffdraft baselines --explain cuomo` shows how each one is derived and
+  # where the derivation disagrees.
+  explicit:
+    QB: 17    # 8 fixed + 8 superflex = 16 start, so QB17 is free
+    RB: 23    # 16 fixed + 6 of the 16 W/R/T slots
+    WR: 33    # 24 fixed + 8 of the 16 W/R/T slots
+    TE: 10    # roster-count judgement, not starter demand - see note below
+    K: 9      # 8 start, 9th is free
+    DST: 9
+
+  # ASSUMPTION TO REVISIT (brief section 4): the two W/R/T slots are assumed to
+  # skew WR, given half PPR and three WRs already required. Shifting this moves
+  # the RB and WR baselines a couple of ranks each.
+  flex_shares:
+    WRT:  {WR: 0.500, RB: 0.375, TE: 0.125}   # 16 slots -> 8 WR, 6 RB, 2 TE
+    QWRT: {QB: 1.0}                            # 8 slots -> 8 QB
+
+  # Expected bench picks spent per position, as a share of the 48 bench slots.
+  # Only used by the `drafted` derivation mode; see docs/baselines.md.
+  bench_shares: {RB: 0.35, WR: 0.35, QB: 0.12, TE: 0.12, K: 0.03, DST: 0.03}
+
+calibration:
+  # Section 3.3. Every number below is a published figure from Fantasy Football
+  # Analytics' 12-season study (2014-2025, 11 sources).
+  aggregate: average     # NOT weighted - source accuracy does not persist.
+
+  # Calibration slope < 1.0 at every position: top-projected players
+  # underperform, bottom-projected meet or beat. Applied as a per-position
+  # regression toward the positional mean.
+  slopes: {QB: 0.67, TE: 0.72, RB: 0.79, WR: 0.85, K: 1.0, DST: 1.0}
+  # ASSUMPTION: no published slope for K/DST, so they are left uncorrected at
+  # 1.0. Both are punted positions; the error does not reach a starting choice.
+
+  # Seasonal projections are systematically optimistic. Mean error +21.6 pts
+  # overall, +46.5 for QB in recent seasons.
+  optimism: {QB: 46.5, RB: 21.6, WR: 21.6, TE: 21.6, K: 0.0, DST: 0.0}
+  # ASSUMPTION: the +21.6 overall figure is a skill-position average; applying
+  # it to a ~130-pt kicker is not supported by the source, so K/DST get 0.
+
+  # Projections explain only ~14-26% of within-position variance. This is the
+  # single most important number in the file: it sets how wide every player's
+  # outcome distribution is, and it is what makes the engine spend its effort
+  # on decision quality under uncertainty rather than projection precision.
+  r_squared: {QB: 0.20, RB: 0.20, WR: 0.20, TE: 0.20, K: 0.20, DST: 0.20}
+
+  # Positional mean is anchored on players ranked at or above
+  # anchor_multiple x replacement. Including 4th-stringers would drag the
+  # mean down and inflate everyone after shrinkage.
+  anchor_multiple: 1.5
+
+opponents:
+  # Section 3.4 - empirical priors from Lee & Liu (2022), 1,350 Sleeper leagues.
+  adp_noise_picks: 8.0        # sd of a pick's deviation from consensus ADP
+  herding_multiplier: 2.5     # P(position) rises sharply after a same-position pick
+  herding_qb_pick_limit: 20   # QB herding is documented in ~the first 20 picks
+  herding_positions: [QB, K, DST]
+  always_herd_positions: [K, DST]   # K and DST herd throughout, not just early
+  reach_temperature: 1.0
+  # NOT IMPLEMENTED ON PURPOSE: handcuffing. 793 teams with a handcuff pair won
+  # 51.04% vs 50.56% without, Bayes factor 4.2 *favouring no difference*.
+
+sim:
+  n_sims: 2500
+  seed: 20260901              # explicit; an unseeded sim is not reproducible
+  games: 17
+  candidate_pool: 12          # candidates carried into the Monte Carlo
+  # PLACEHOLDER pending nflverse: week-to-week coefficient of variation of a
+  # player's scoring, given his season-long mean. Replace with measured values
+  # via `ffdraft variance --from-weekly <nflverse csv>`.
+  weekly_cv: {QB: 0.35, RB: 0.55, WR: 0.60, TE: 0.65, K: 0.50, DST: 0.70}
+  # PLACEHOLDER: expected games missed to injury, by position.
+  injury_game_loss: {QB: 1.5, RB: 2.5, WR: 1.8, TE: 1.8, K: 0.3, DST: 0.0}
+
+policy:
+  # Section 3.5: the three most common roster builds are ~60% of all teams and
+  # all win ~50%. The builds that beat 50% systematically carried more RB/WR at
+  # the expense of K and DST. These guards stop the engine drifting into the
+  # herd; they are overridden automatically when the remaining picks are
+  # exactly the mandatory slots left to fill.
+  min_round_k: 15
+  min_round_dst: 14
+
+notes:
+  - "4-pt passing TDs suppress pocket passers and make rushing QBs
+     disproportionately valuable - and the superflex means you need two."
+  - "Playoffs take half the field (4 of 8), which weakens the case for
+     regular-season dominance and tilts the objective toward ceiling."
+  - "TE baseline of 10 is a roster-count judgement ('about 10 TEs get drafted'),
+     not starter demand. Starter demand under the flex shares above is only
+     ~2-3 TEs. See docs/baselines.md - this is the one entry in the brief's
+     table that does not fall out of the demand arithmetic."
