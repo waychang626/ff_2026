@@ -317,6 +317,30 @@ real mock draft room to practise typing.
 
 ---
 
+## 2.5 After the draft — trades
+
+```bash
+ffdraft trades --league league2 --log logs/draft_league2.jsonl --surplus
+```
+
+`--surplus` prints the position-by-position map first: who is long, who is
+short. That is where the trades come from, and it is worth reading before the
+ideas so you know why each one exists.
+
+Each idea shows what you send, what you get, what your starting lineup gains,
+**what theirs gains** — that is the reason they say yes — the effect on your
+title odds, and your worst bye week after the deal.
+
+Read the `SELL` line before you send anything. It compares the draft position of
+what you are giving up against what you are asking for. A trade the numbers love
+and the other owner reads as a robbery does not get accepted, and the tool says
+so rather than letting you find out.
+
+`--partner 5` narrows it to one owner. `--max-give 1 --max-get 1` restricts it
+to straight one-for-ones, which are far easier to get agreed.
+
+---
+
 ## 3. Reading the output
 
 ```

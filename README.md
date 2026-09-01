@@ -147,6 +147,19 @@ they read the seat from the config or the flag, not from the log header.
 `--actuals` is a CSV of realised season totals: either a `player_id` column, or
 `player` and `pos` columns, plus `points`.
 
+### Trading, once the draft is over
+
+| You want to | Type this |
+|---|---|
+| Find trades worth proposing | `ffdraft trades --league <id> --log logs/draft_<id>.jsonl` |
+| See who is long and short at each position | add `--surplus` |
+| Only look at one owner | add `--partner 5` |
+| Only 1-for-1 offers | add `--max-give 1 --max-get 1` |
+| Insist the other side gains more | add `--min-their-gain 20` |
+| See more ideas | add `--top 10` |
+
+This one reads your seat out of the log header, so `--seat` is optional.
+
 ### Flags that work on almost every command
 
 | Flag | What it does |
@@ -247,6 +260,7 @@ league.yaml ─► baselines (§3.2) ─► VOR + tiers ────────
 | `opponents.py` | §3.4 opponent model and the draft rollout |
 | `simulate.py` | Season Monte Carlo → P(weekly win), P(playoffs), P(title) |
 | `engine.py` | `recommend_pick` and the guards around it |
+| `trades.py` | Post-draft trade search: surplus filter, then the season sim |
 | `replay.py` | Replay harness and backtester |
 | `audit.py` | `(state_hash, output, timestamp)` for every call |
 | `cli.py` | The draft-day console |
@@ -493,7 +507,7 @@ Built and tested in a container with no R and no outbound access to the
 projection sources, so:
 
 **Verified** — the whole Python engine, end to end, against a synthetic board:
-205 tests, determinism, greedy-vs-brute-force lineups, the calibration
+234 tests, determinism, greedy-vs-brute-force lineups, the calibration
 arithmetic, the opponent model's herding, the endogenous variance appetite, both
 league configs, the replay harness and the backtester.
 
@@ -512,7 +526,7 @@ result.
 ## Testing
 
 ```bash
-python -m pytest              # 205 tests, ~45s
+python -m pytest              # 234 tests, ~95s
 python -m pytest tests/test_variance_appetite.py -v   # the §3.1 behaviour
 ```
 
@@ -627,6 +641,32 @@ seat still needs, and whether a run is on.
 that pick 40 went in as the wrong Josh. `fix` swaps one recorded pick and
 refuses anything that would corrupt the log.
 
+### `ffdraft trades`: what to offer, to whom, and why they would accept
+A trade creates value out of positional imbalance, not out of one side being
+fooled: your RB4 scores you nothing on Sunday, and the WR-heavy owner has the
+mirror-image problem. The search is therefore a surplus search, run in the two
+stages `engine.py` already uses — a cheap filter, then the expensive truth.
+
+Stage 1 recomputes both teams' optimal starting lineups on point estimates for
+every candidate trade (~164k on an eight-team board, under a second, because it
+is the `lineup.py` primitive vectorised over candidates) and keeps only those
+that raise *both*. Stage 2 runs the season Monte Carlo on the survivors and
+reports the change in your P(title), on common random numbers so the differences
+between trades are differences in the trades.
+
+Stage 2 is where bye weeks and depth get priced: `draw_season` zeroes a player's
+bye outright, so a trade that stacks three receivers into week 11 shows up as
+lower title odds without anything special being done about it. Because a number
+moving by half a point does not *say* what went wrong, every finalist is also
+profiled week by week and a trade that deepens your worst week is flagged in
+words.
+
+Two things it refuses to pretend. Uneven trades force a cut, so a 1-for-2 is not
+a free extra player. And the other owner does not run a lineup optimiser — they
+value players by name and draft position — so every idea carries the ADP gap
+next to the projection gap, and asking for the earlier-drafted name is labelled
+a hard sell however good the arithmetic is.
+
 ### One console surface, so practice matches draft day
 `mock` accepted a strict subset of the live console: no `log`, no `undo`, no
 `fix`, `roster` with no seat argument, and a bare `2` resolved as a *player
@@ -652,4 +692,4 @@ with the brief's open-item verification.
 ### Initial build
 The engine end to end in the brief's build order: replay harness first, then
 projections, calibration, VOR, opponent model, Monte Carlo, `recommend_pick`,
-and the LLM layer last. 205 tests.
+and the LLM layer last. 234 tests.

@@ -848,6 +848,37 @@ def _finish(board, state, config, log, log_path, stopped: bool) -> None:
 
 
 
+def cmd_trades(args) -> int:
+    """Post-draft trade search. The draft is over; this is the next lever."""
+    from .replay import DraftLog
+    from .trades import find_trades, format_report, format_surplus
+
+    config, board = _load(args)
+    log = DraftLog.load(args.log)
+    seat = args.seat or config.my_seat or log.my_seat
+    if seat is None:
+        raise SystemExit(
+            "cannot tell which seat is yours: pass --seat, or set draft.my_seat"
+        )
+    audit = AuditLog(args.audit) if args.audit else AuditLog()
+
+    partners = [args.partner] if args.partner else None
+    report = find_trades(
+        config, board, log.player_ids, seat,
+        partners=partners,
+        max_give=args.max_give,
+        max_get=args.max_get,
+        min_their_gain=args.min_their_gain,
+        top=args.top,
+        audit=audit,
+    )
+    if args.surplus:
+        print(format_surplus(report, config))
+        print()
+    print(format_report(report, board, config))
+    return 0
+
+
 # The sources R/pull_projections.R asks for - keep the two lists in step. A
 # source that errors during a scrape is skipped with a warning and simply never
 # appears in the CSV, so the only way to notice is to compare what arrived
@@ -1259,6 +1290,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", help="where to write the mock pick log")
     p.add_argument("--audit", help="where to write the audit log")
     p.set_defaults(func=cmd_mock)
+
+    p = sub.add_parser("trades", help="post-draft trade ideas, ranked by your title odds")
+    common(p)
+    p.add_argument("--log", required=True, help="the pick log from the draft")
+    p.add_argument("--partner", type=int, help="only look at trades with this seat")
+    p.add_argument("--top", type=int, default=5, help="how many ideas to print")
+    p.add_argument("--max-give", type=int, default=2,
+                   help="most players you would send in one trade")
+    p.add_argument("--max-get", type=int, default=2,
+                   help="most players you would receive in one trade")
+    p.add_argument("--min-their-gain", type=float, default=1.0,
+                   help="points the other roster must gain, or it is not an offer")
+    p.add_argument("--surplus", action="store_true",
+                   help="also print who is long and short at each position")
+    p.add_argument("--audit", help="where to write the audit log")
+    p.set_defaults(func=cmd_trades)
 
     p = sub.add_parser("replay", help="replay a draft log through the engine")
     common(p)
