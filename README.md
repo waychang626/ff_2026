@@ -38,6 +38,135 @@ ffdraft check --league cuomo --seat 3 \
 
 ---
 
+## What do you want to do?
+
+Every action, by the thing you are trying to do. `<id>` is a league id from
+`configs/leagues/` — currently `cuomo` or `league2`. `<n>` is your seat number,
+which you can also set once as `draft.my_seat` in the league config and then
+leave off every command below.
+
+### Setting up, before draft day
+
+| You want to | Type this |
+|---|---|
+| Install it | `pip install -e ".[dev]"` |
+| Install it with the Claude console too | `pip install -e ".[dev,llm]"` |
+| Get projections (needs R ≥ 4.1) | `Rscript R/pull_projections.R --season 2026` |
+| Install the R side first | `Rscript R/setup.R` |
+| Try everything with no real data | `python scripts/make_synthetic_board.py` |
+| Get canonical player IDs and byes | `python scripts/fetch_sleeper.py` |
+
+`R/pull_projections.R` also takes `--out <path>` and `--adp-out <path>`.
+`scripts/make_synthetic_board.py` takes `--seed` and `--out-dir`;
+`scripts/fetch_sleeper.py` takes `--cache`, `--out` and `--force`.
+
+### Checking things are right
+
+| You want to | Type this |
+|---|---|
+| Read your league config back, in plain English | `ffdraft rules --league <id>` |
+| Compare two leagues' settings | `ffdraft rules --league <id> --diff <other-id>` |
+| Confirm you are ready to draft | `ffdraft check --league <id> --seat <n>` |
+| See if the projection pull got everything | `ffdraft sources --league <id>` |
+| Understand where replacement level came from | `ffdraft baselines --league <id>` |
+| Eyeball the board | `ffdraft board --league <id> --top 30` |
+| Eyeball one position | `ffdraft board --league <id> --pos RB --top 20` |
+| Send scoring rules to the R side | `ffdraft export-r --league <id>` |
+
+`ffdraft check` must print `READY`. Run it the morning of, not five minutes
+before.
+
+### Drafting
+
+| You want to | Type this |
+|---|---|
+| Run the live console | `ffdraft draft --league <id> --seat <n>` |
+| Run it faster on a tight clock | add `--sims 800` |
+| See more candidates on your pick | add `--show 5` |
+| Turn off the likely-pick shortlist | add `--no-suggest` |
+| Put the pick log somewhere specific | add `--out logs/mydraft.jsonl` |
+| Keep an audit log of projection edits | add `--audit logs/audit.jsonl` |
+| Drive it by talking to Claude instead | `ffdraft llm --league <id> --seat <n>` |
+
+### Inside the console — the commands you type at the prompt
+
+These are identical in `ffdraft draft` and `ffdraft mock`.
+
+| You want to | Type this |
+|---|---|
+| **Record someone else's pick** | `bijan gone` — any messy name works |
+| Record it faster | `3` — takes the 3rd player off the numbered list |
+| Record a pick as yours | `me josh allen` |
+| **See your own roster** | `roster` |
+| **See an opponent's roster** | `roster 3` |
+| See who has gone recently | `log` or `log 20` |
+| See the best players left | `board` or `board RB` |
+| Get the recommendation again | `go` (also `rec` or `.`) |
+| Take back the last pick | `undo` |
+| Fix a pick you got wrong four picks ago | `log` to find the number, then `fix 40 josh allen` |
+| Tell the engine someone is out for the year | `out james cook : ACL, ruled out` |
+| Tell it someone is dinged but playing | `bump james cook 0.75 : limited all week` |
+| Write the pick log right now | `save` |
+| List these commands | `help` (also `?` or `h`) |
+| Stop | `quit` (also `exit` or `q`) |
+
+Two things worth knowing about the number shortcut. On **your** pick it selects
+from the engine's ranked candidates; on **someone else's** it selects from the
+likely-pick shortlist. It is always scoped to the list currently on screen, and
+a list never outlives the pick it was built for.
+
+The reason on `out` and `bump` is not optional — it goes in the audit log, and
+an unexplained edit to the board is indistinguishable from a typo a week later.
+
+### Practising
+
+| You want to | Type this |
+|---|---|
+| Practise against simulated opponents | `ffdraft mock --league <id> --seat <n>` |
+| Take the engine's top pick | press **Enter** |
+| Watch the engine draft a whole roster | `ffdraft mock --league <id> --seat <n> --auto` |
+| Hand it the rest mid-draft | `auto` |
+| Get the same mock twice | add `--seed 7` |
+
+Every console command in the table above works here too. That is deliberate —
+a command you reach for under a clock should be one you have already used.
+
+### After the draft
+
+| You want to | Type this |
+|---|---|
+| Re-run your draft through the engine | `ffdraft replay --league <id> --seat <n> --log logs/draft_<id>.jsonl` |
+| Only replay the first few picks | add `--limit 5` |
+| Prove the engine is deterministic | `ffdraft replay --league <id> --seat <n> --log <path> --check` |
+| Check determinism harder | add `--runs 5` |
+| Score how the engine would have drafted | `ffdraft backtest --league <id> --seat <n> --log <path> --actuals <path>` |
+
+`replay` and `backtest` need `--seat` even though the pick log records it —
+they read the seat from the config or the flag, not from the log header.
+
+`--actuals` is a CSV of realised season totals: either a `player_id` column, or
+`player` and `pos` columns, plus `points`.
+
+### Flags that work on almost every command
+
+| Flag | What it does |
+|---|---|
+| `--league <id>` | Which league. Required nearly everywhere. |
+| `--seat <n>` | Your seat, overriding the config |
+| `--sims <n>` | Simulations per pick. Lower is faster and noisier. |
+| `--projections <path>` / `--market <path>` | Use specific data files |
+| `--season <year>` | Which season's default data files to look for (default 2026) |
+| `--pool <n>` | How many players to load onto the board (default 260) |
+
+To run anything against the synthetic board, add:
+
+```bash
+--projections data/samples/projections_synthetic.csv \
+--market data/samples/market_synthetic.csv
+```
+
+---
+
 ## The tool contract
 
 ```python
