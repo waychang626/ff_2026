@@ -708,6 +708,105 @@ def _finish(board, state, config, log, log_path, stopped: bool) -> None:
     print("  season is mostly noise - do not read the total as a prediction.")
 
 
+
+# The sources R/pull_projections.R asks for. A source that errors during a
+# scrape is skipped with a warning and simply never appears in the CSV, so the
+# only way to notice is to compare what arrived against what was requested.
+EXPECTED_SOURCES = (
+    "CBS", "ESPN", "FantasyPros", "FFToday", "FantasyData",
+    "FleaFlicker", "NumberFire", "NFL", "RTSports",
+)
+
+
+def cmd_sources(args) -> int:
+    """Per-source, per-position coverage of the projection file.
+
+    Row counts alone hide the failure that matters: a source that returns
+    quarterbacks and silently no defenses still looks present. Since the engine
+    equal-weights whatever it finds, a source covering half the positions
+    quietly changes the weighting at the other half.
+    """
+    from collections import defaultdict
+
+    from .projections import load_stat_lines
+
+    config = load_by_id(args.league) if args.league else None
+    proj, _ = default_paths(args.season)
+    if args.projections:
+        proj = Path(args.projections)
+    if not Path(proj).exists():
+        raise SystemExit(f"no projections at {proj}")
+
+    rows = load_stat_lines(proj)
+    per_source: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    totals: dict[str, int] = defaultdict(int)
+    for row in rows:
+        per_source[row.source][row.pos].add(row.player_id)
+        totals[row.source] += 1
+
+    found = sorted(per_source)
+    print(f"{proj}  -  {len(rows)} rows, {len(found)} sources\n")
+    header = f"  {'source':<16}{'rows':>7}" + "".join(f"{p:>6}" for p in POSITIONS)
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+
+    # Median coverage per position, to spot a source that is thin rather than absent.
+    median: dict[str, float] = {}
+    for pos in POSITIONS:
+        counts = sorted(len(per_source[src].get(pos, ())) for src in found)
+        median[pos] = counts[len(counts) // 2] if counts else 0
+
+    # A position no source covers is a missing position, not nine thin sources.
+    absent_positions = [p for p in POSITIONS if median[p] == 0]
+
+    thin: list[tuple[float, str]] = []
+    for src in found:
+        cells = ""
+        for pos in POSITIONS:
+            n = len(per_source[src].get(pos, ()))
+            is_thin = median[pos] > 0 and n < median[pos] * 0.5
+            cells += f"{str(n) + ('!' if is_thin else ''):>6}"
+            if is_thin:
+                thin.append((n / median[pos], f"{src}/{pos}"))
+        print(f"  {src:<16}{totals[src]:>7}{cells}")
+
+    missing = [s for s in EXPECTED_SOURCES if s not in found]
+    extra = [s for s in found if s not in EXPECTED_SOURCES]
+
+    print()
+    if missing:
+        print(f"  MISSING ({len(missing)}): {', '.join(missing)}")
+        print("           These were requested but returned nothing. Usually the")
+        print("           source changed its page layout or was unreachable.")
+        print("           Re-run the pull; if one keeps failing, drop it from the")
+        print("           `sources` vector in R/pull_projections.R and re-run.")
+    if extra:
+        print(f"  UNEXPECTED: {', '.join(extra)}")
+    if absent_positions:
+        print(f"  NO DATA AT ALL for: {', '.join(absent_positions)}")
+        print("           No source returned these positions. The engine cannot")
+        print("           compute replacement level for them.")
+    if thin:
+        # Worst first - a source at 5% of its peers matters more than one at 45%.
+        worst = [name for _, name in sorted(thin)][:8]
+        print(f"  THIN (marked !): {', '.join(worst)}")
+        print("           Present but covering far fewer players than its peers.")
+        print("           The engine equal-weights whatever it finds, so a source")
+        print("           that covers half a position shifts the average there.")
+    if not missing and not thin and not absent_positions:
+        print(f"  all {len(found)} sources present with comparable coverage")
+
+    if config is not None:
+        print()
+        for pos in POSITIONS:
+            players = {pid for src in found for pid in per_source[src].get(pos, ())}
+            need = config.vor_baseline[pos]
+            mark = "ok " if len(players) >= need else "LOW"
+            print(f"  {mark} {pos:<4}{len(players):>4} distinct players "
+                  f"(replacement rank {need})")
+    return 0
+
+
 # --- wiring ------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ffdraft", description=__doc__)
@@ -737,6 +836,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pos")
     p.add_argument("--top", type=int, default=25)
     p.set_defaults(func=cmd_board)
+
+    p = sub.add_parser("sources", help="per-source coverage of the projection file")
+    p.add_argument("--league")
+    p.add_argument("--projections")
+    p.add_argument("--season", type=int, default=2026)
+    p.set_defaults(func=cmd_sources)
 
     p = sub.add_parser("check", help="pre-draft preflight")
     common(p)

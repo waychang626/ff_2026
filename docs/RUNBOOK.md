@@ -74,7 +74,29 @@ wrote data/market_2026.csv: 298 rows
 
 Re-run any time to refresh. It overwrites.
 
-### 1.2 Preflight — 5 seconds
+### 1.2 Confirm all nine sources arrived — 5 seconds
+
+```bash
+ffdraft sources --league league2
+```
+
+`scrape_data` skips a source that errors and carries on, so a failed source
+does not announce itself — it just never appears in the file. This prints a
+per-source, per-position table and names anything requested but absent.
+
+What to look for:
+
+| Output | Meaning |
+|---|---|
+| `all 9 sources present with comparable coverage` | Good. |
+| `MISSING (2): FantasyData, RTSports` | Those failed. Re-run the pull; if one keeps failing, drop it from the `sources` vector in `R/pull_projections.R`. Seven good sources beat nine where two are broken. |
+| `THIN (marked !): CBS/WR` | Present but covering a fraction of its peers. The engine equal-weights whatever it finds, so this shifts the average at that position only. |
+| `LOW  RB  12 distinct players (replacement rank 30)` | Not enough players to reach replacement level. VOR at that position is meaningless until fixed. |
+
+Six or seven healthy sources is fine. The equal-weighted average is robust; it
+is a source that is *half* there that quietly distorts things.
+
+### 1.3 Preflight — 5 seconds
 
 ```bash
 ffdraft check --league league2 --seat 5
@@ -87,7 +109,7 @@ downstream is wrong.
 
 `NOT READY` prints a `FAIL` line saying exactly what's missing.
 
-### 1.3 Sanity-check the board — 2 minutes
+### 1.4 Sanity-check the board — 2 minutes
 
 ```bash
 ffdraft board --league league2 --top 30
@@ -409,6 +431,7 @@ This is a draft tool.
 ## Command reference
 
 ```bash
+ffdraft sources   --league <id>                     # per-source coverage
 ffdraft check     --league <id> --seat <n>          # preflight
 ffdraft board     --league <id> [--pos RB] [--top 30]
 ffdraft baselines --league <id>                     # replacement-level arithmetic
