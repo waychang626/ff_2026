@@ -46,5 +46,24 @@ def build_board_for(
         else 0
     )
     return build_board(
-        calibrated, market, pool_size=pool_size, min_per_position=min_per_position
+        calibrated,
+        market,
+        pool_size=pool_size,
+        min_per_position=min_per_position,
+        impute_rank=_vor_rank(calibrated, config.vor_baseline),
     )
+
+
+def _vor_rank(calibrated, vor_baseline: dict[str, int]) -> dict[str, float]:
+    """VOR per player, used as the stand-in draft order when ADP is missing."""
+    by_pos: dict[str, list] = {}
+    for row in calibrated:
+        by_pos.setdefault(row.pos, []).append(row)
+
+    replacement: dict[str, float] = {}
+    for pos, group in by_pos.items():
+        points = sorted((r.points for r in group), reverse=True)
+        idx = min(max(vor_baseline.get(pos, 12) - 1, 0), len(points) - 1)
+        replacement[pos] = points[idx]
+
+    return {r.player_id: r.points - replacement[r.pos] for r in calibrated}

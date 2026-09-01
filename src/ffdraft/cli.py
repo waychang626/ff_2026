@@ -110,8 +110,17 @@ def cmd_check(args) -> int:
     if config.my_seat is None:
         problems.append("draft.my_seat is unset - set it in the config or pass --seat")
     imputed = int(board.adp_imputed.sum())
-    if imputed > len(board) * 0.5:
-        warnings.append(f"{imputed}/{len(board)} players have no market ADP")
+    coverage = 1.0 - (imputed / max(len(board), 1))
+    if coverage < 0.5:
+        warnings.append(
+            f"ADP MISSING for {imputed}/{len(board)} players "
+            f"({coverage:.0%} covered).\n"
+            f"        Draft order is falling back to VOR rank. The board and the\n"
+            f"        recommendations are still sound, but SURVIVAL probabilities and\n"
+            f"        the numbered pick list are approximations.\n"
+            f"        Usual cause: the market CSV has an empty or 'NA' adp column.\n"
+            f"        Check with:  head -3 data/market_2026.csv"
+        )
     for pos in POSITIONS:
         n = int(board.pos_mask(pos).sum())
         need = config.vor_baseline[pos]
@@ -129,6 +138,8 @@ def cmd_check(args) -> int:
     print(f"playoffs      {config.playoff_teams} of {config.teams}, weeks {list(config.playoff_weeks)}")
     print(f"board         {len(board)} players  "
           + " ".join(f"{p}:{int(board.pos_mask(p).sum())}" for p in POSITIONS))
+    print(f"market ADP    {len(board) - imputed}/{len(board)} real "
+          f"({coverage:.0%}), {imputed} imputed from VOR rank")
     print(f"baselines     {config.vor_baseline}")
     print(f"sims          {config.sim.n_sims}, seed {config.sim.seed}")
     print(f"fingerprints  league={config.fingerprint()} board={board.fingerprint()}")
@@ -215,6 +226,12 @@ def cmd_draft(args) -> int:
 
     print(f"{config.name} - seat {config.my_seat} of {config.teams}, "
           f"{config.rounds} rounds, {config.sim.n_sims} sims/pick")
+    imputed = int(board.adp_imputed.sum())
+    if imputed > len(board) * 0.5:
+        print(f"  WARNING: {imputed}/{len(board)} players have no market ADP; "
+              f"draft order is VOR rank.\n"
+              f"           Survival % and the numbered list are approximate. "
+              f"Run `ffdraft check` for the fix.")
     print(f"pick log -> {log_path}")
     print(HELP)
 

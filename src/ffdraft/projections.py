@@ -69,6 +69,33 @@ def _f(value: str | float | None) -> float:
         return 0.0
 
 
+# Values a CSV uses to mean "no number". R writes NA; pandas writes empty or nan.
+_NULLISH = {"", "NA", "N/A", "NAN", "NONE", "NULL", "-", "--"}
+
+
+def maybe_float(value: object) -> float | None:
+    """Strict parse: None when the cell does not hold a real number.
+
+    Deliberately not `_f`, which returns 0.0 for anything unparseable. That is
+    right for a stat column - a missing rushing line really is zero - and
+    catastrophic for ADP, where 0.0 is not "unknown" but "the very first pick".
+    An R export whose ADP column is all NA turned every player into the
+    consensus 1.01 and the draft-order model into a coin flip.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.upper() in _NULLISH:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
 def load_stat_lines(path: str | Path) -> list[StatLine]:
     """Read a long-format CSV: one row per (source, player).
 
@@ -171,13 +198,26 @@ class MarketData:
     adp: dict[str, float] = field(default_factory=dict)
     adp_sd: dict[str, float] = field(default_factory=dict)
     ecr: dict[str, float] = field(default_factory=dict)
+    rows_read: int = 0
+    rows_without_adp: int = 0
 
     def __len__(self) -> int:
         return len(self.adp)
 
+    @property
+    def looks_empty(self) -> bool:
+        """True when the file parsed but carried no usable draft order."""
+        return self.rows_read > 0 and len(self.adp) < max(20, self.rows_read * 0.2)
+
 
 def load_market(path: str | Path) -> MarketData:
-    """Read ADP/ECR: columns player, pos, adp, and optionally adp_sd, ecr."""
+    """Read ADP/ECR: columns player, pos, adp, and optionally adp_sd, ecr.
+
+    A cell that is not a positive number is treated as missing, not as zero.
+    The player then falls through to imputation, which at least preserves a
+    sane ordering; a silent 0.0 would make him the consensus first overall
+    pick.
+    """
     path = Path(path)
     market = MarketData()
     with path.open(newline="") as handle:
@@ -186,11 +226,22 @@ def load_market(path: str | Path) -> MarketData:
             pos = (raw.get("pos") or raw.get("position") or "").strip().upper()
             if not name or not pos:
                 continue
-            pid = make_player_id(name, pos)
-            if raw.get("adp"):
-                market.adp[pid] = _f(raw["adp"])
-            if raw.get("adp_sd"):
-                market.adp_sd[pid] = _f(raw["adp_sd"])
-            if raw.get("ecr"):
-                market.ecr[pid] = _f(raw["ecr"])
+            try:
+                pid = make_player_id(name, pos)
+            except ValueError:
+                continue
+            market.rows_read += 1
+
+            adp = maybe_float(raw.get("adp"))
+            if adp is not None and adp > 0:
+                market.adp[pid] = adp
+            else:
+                market.rows_without_adp += 1
+
+            sd = maybe_float(raw.get("adp_sd"))
+            if sd is not None and sd > 0:
+                market.adp_sd[pid] = sd
+            ecr = maybe_float(raw.get("ecr"))
+            if ecr is not None and ecr > 0:
+                market.ecr[pid] = ecr
     return market

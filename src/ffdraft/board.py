@@ -125,6 +125,7 @@ def build_board(
     market: MarketData | None = None,
     pool_size: int | None = None,
     min_per_position: int = 0,
+    impute_rank: dict[str, float] | None = None,
 ) -> Board:
     """Assemble a Board. `pool_size` trims to the top N by ADP-or-points.
 
@@ -139,11 +140,27 @@ def build_board(
     # Deterministic pre-sort so imputed ADP does not depend on input order.
     rows.sort(key=lambda c: (-round(c.points, 6), c.player_id))
 
-    # Impute ADP for anyone the market file does not cover. Points rank is the
-    # only signal we have; offsetting past the deepest real ADP keeps imputed
-    # players behind everyone the market actually ranks.
+    # Impute ADP for anyone the market file does not cover, offsetting past the
+    # deepest real ADP so imputed players sit behind everyone the market
+    # actually ranks.
+    #
+    # `impute_rank` should be VOR order where the caller can supply it. Raw
+    # points order is a poor stand-in for draft order - it drafts every
+    # quarterback far too early, because a QB outscores a running back without
+    # being worth more than the next quarterback. VOR is the cheapest available
+    # correction and needs no extra data.
     real_adp = [market.adp[c.player_id] for c in rows if c.player_id in market.adp]
     max_adp = max(real_adp) if real_adp else 0.0
+    if impute_rank:
+        order_key = sorted(
+            range(len(rows)),
+            key=lambda i: (-impute_rank.get(rows[i].player_id, float("-inf")),
+                           rows[i].player_id),
+        )
+        fallback_rank = {rows[i].player_id: n for n, i in enumerate(order_key, start=1)}
+    else:
+        fallback_rank = {row.player_id: n for n, row in enumerate(rows, start=1)}
+
     adp_vals, imputed = [], []
     for rank, row in enumerate(rows, start=1):
         if row.player_id in market.adp:
@@ -153,7 +170,7 @@ def build_board(
             adp_vals.append(market.ecr[row.player_id])
             imputed.append(False)
         else:
-            adp_vals.append(max_adp + rank)
+            adp_vals.append(max_adp + fallback_rank[row.player_id])
             imputed.append(True)
 
     order = np.argsort(np.array(adp_vals, dtype=float), kind="stable")
