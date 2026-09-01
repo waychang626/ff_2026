@@ -709,13 +709,15 @@ def _finish(board, state, config, log, log_path, stopped: bool) -> None:
 
 
 
-# The sources R/pull_projections.R asks for. A source that errors during a
-# scrape is skipped with a warning and simply never appears in the CSV, so the
-# only way to notice is to compare what arrived against what was requested.
-EXPECTED_SOURCES = (
-    "CBS", "ESPN", "FantasyPros", "FFToday", "FantasyData",
-    "FleaFlicker", "NumberFire", "NFL", "RTSports",
-)
+# The sources R/pull_projections.R asks for - keep the two lists in step. A
+# source that errors during a scrape is skipped with a warning and simply never
+# appears in the CSV, so the only way to notice is to compare what arrived
+# against what was requested.
+#
+# FantasyData, FleaFlicker, NumberFire and NFL are deliberately absent: none
+# returns season-long data (paywall, no draft data, and a parser broken by a
+# page-structure change respectively). See the note in R/pull_projections.R.
+EXPECTED_SOURCES = ("CBS", "ESPN", "FantasyPros", "FFToday", "RTSports")
 
 
 def cmd_sources(args) -> int:
@@ -810,48 +812,72 @@ def cmd_sources(args) -> int:
 
 
 def _report_scale(rows, config, found: list[str]) -> None:
-    """Median scored points per source, to catch one on a different scale.
+    """Per-source scale, measured on players the sources actually share.
 
-    This is the failure nothing else here would notice. A source publishing
-    per-game rather than per-season numbers, or half-PPR where its peers are
-    full, still shows perfect per-position coverage - it just contributes
-    numbers roughly 17x or 15% off, and the equal-weighted average silently
-    absorbs the error into every player it touches.
+    The naive version of this - median points per source - measures coverage
+    depth, not scale. A source carrying only the top ten at each position has a
+    median roughly twice that of one carrying a hundred, and a source going two
+    hundred deep has a lower one, neither of which says anything about the
+    numbers being on the same basis. That version flagged a perfectly sound
+    source as off-scale.
+
+    So compare each source against the others *on the same players*: for every
+    player at least two sources cover, take that source's points over the mean
+    across the sources covering him, and report the median of those ratios.
+    Coverage cancels out; a genuine per-game-versus-per-season mismatch does
+    not.
     """
     import statistics
     from collections import defaultdict
 
     from .scoring import score_stats
 
-    # Compare on one position with wide coverage, so the median is meaningful.
-    per_source_points: dict[str, list[float]] = defaultdict(list)
+    by_player: dict[str, dict[str, float]] = defaultdict(dict)
     for row in rows:
-        if row.pos in ("RB", "WR"):
-            per_source_points[row.source].append(score_stats(row.stats, config.scoring))
+        if row.pos in ("QB", "RB", "WR", "TE"):
+            by_player[row.player_id][row.source] = score_stats(row.stats, config.scoring)
+
+    ratios: dict[str, list[float]] = defaultdict(list)
+    shared = 0
+    for scores in by_player.values():
+        if len(scores) < 2:
+            continue
+        mean = statistics.fmean(scores.values())
+        if mean <= 0:
+            continue
+        shared += 1
+        for src, value in scores.items():
+            ratios[src].append(value / mean)
 
     usable = {
         src: statistics.median(values)
-        for src, values in per_source_points.items()
+        for src, values in ratios.items()
         if len(values) >= 10
     }
     if len(usable) < 2:
+        print("\n  scale check: not enough shared players to compare sources")
         return
 
-    overall = statistics.median(usable.values())
-    print(f"\n  scale check (median RB/WR points, cross-source median {overall:.0f}):")
+    print(f"\n  scale check (points vs the other sources, on {shared} shared players):")
     suspect = []
     for src in sorted(usable, key=lambda s: -usable[s]):
-        value = usable[src]
-        ratio = value / overall if overall else 1.0
-        flag = "" if 0.7 <= ratio <= 1.4 else "   <-- OFF SCALE"
+        ratio = usable[src]
+        n = len(ratios[src])
+        flag = "" if 0.75 <= ratio <= 1.33 else "   <-- OFF SCALE"
         if flag:
             suspect.append(src)
-        print(f"    {src:<16}{value:>8.0f}  ({ratio:.2f}x){flag}")
+        print(f"    {src:<16}{ratio:>6.2f}x   on {n:>4} shared players{flag}")
+    for src in found:
+        if src not in usable:
+            print(f"    {src:<16}     -    too few shared players to compare")
+
     if suspect:
-        print(f"  {', '.join(suspect)} projects on a different scale from its peers.")
+        print(f"  {', '.join(suspect)} is on a different scale from its peers.")
         print("  Likely per-game instead of per-season, or a different scoring")
-        print("  basis. Equal weighting will drag every player it covers toward")
-        print("  that scale - drop it from R/pull_projections.R and re-run.")
+        print("  basis. Equal weighting drags every player it covers toward that")
+        print("  scale - drop it from R/pull_projections.R and re-run.")
+    else:
+        print("  all sources agree on scale within +/-33%")
 
 
 # --- wiring ------------------------------------------------------------------

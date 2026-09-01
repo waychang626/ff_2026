@@ -36,10 +36,23 @@ season   <- as.integer(get_arg("--season", "2026"))
 out_path <- get_arg("--out", sprintf("data/projections_%d.csv", season))
 adp_path <- get_arg("--adp-out", sprintf("data/market_%d.csv", season))
 
-# NumberFire is auto-converted to FanDuel upstream. Sources are internally
-# rate-limited to about 2s/page, so a full pull takes several minutes.
-sources   <- c("CBS", "ESPN", "FantasyPros", "FFToday", "FantasyData",
-               "FleaFlicker", "NumberFire", "NFL", "RTSports")
+# Sources are internally rate-limited to about 2s/page, so a full pull takes
+# several minutes. Four of the brief's nine are omitted because they do not
+# return season-long data at all - verified against a real 2026 pull, where
+# each failed identically on every position and every re-run:
+#
+#   FantasyData  "behind a paywall and is not supported at this time"
+#   FleaFlicker  "Draft data not available"
+#   NumberFire   auto-redirects to FanDuel, then "Draft data not available"
+#   NFL          html_table on an xml_missing node - fantasy.nfl.com changed
+#                its page structure and ffanalytics' parser has not caught up
+#
+# These are structural, not transient, so they are dropped rather than retried:
+# they cost about a minute of scraping each and produce alarming output for no
+# data. Five sources still beat any single one - the aggregation research finds
+# the gain is in averaging at all, with sharp diminishing returns after a few.
+# Re-add any of them if a later ffanalytics release fixes the parser.
+sources   <- c("CBS", "ESPN", "FantasyPros", "FFToday", "RTSports")
 positions <- c("QB", "RB", "WR", "TE", "K", "DST")
 
 message(sprintf("scraping %d sources x %d positions for season %d ...",

@@ -88,13 +88,25 @@ What to look for:
 
 | Output | Meaning |
 |---|---|
-| `all 9 sources present with comparable coverage` | Good. |
+| `all 5 sources present with comparable coverage` | Good. |
 | `MISSING (2): FantasyData, RTSports` | Those failed. Re-run the pull; if one keeps failing, drop it from the `sources` vector in `R/pull_projections.R`. Seven good sources beat nine where two are broken. |
 | `THIN (marked !): CBS/WR` | Present but covering a fraction of its peers. The engine equal-weights whatever it finds, so this shifts the average at that position only. |
 | `LOW  RB  12 distinct players (replacement rank 30)` | Not enough players to reach replacement level. VOR at that position is meaningless until fixed. |
 
-Six or seven healthy sources is fine. The equal-weighted average is robust; it
-is a source that is *half* there that quietly distorts things.
+Four or five healthy sources is fine. The equal-weighted average is robust and
+the gain is in averaging *at all*, with sharp diminishing returns after a few;
+it is a source that is *half* there that quietly distorts things.
+
+The pull asks for five, not the brief's nine. Four were dropped after a real
+2026 pull showed each failing identically on every position and every re-run:
+FantasyData is behind a paywall, FleaFlicker and NumberFire/FanDuel return no
+season-long data, and fantasy.nfl.com changed its page structure in a way
+ffanalytics' parser does not handle. Re-add them if a later release fixes it.
+
+The **scale check** at the bottom is the one that catches a source on a
+different basis — per-game instead of per-season, say. It compares sources only
+on players they both cover, so a source carrying just the top ten is not
+penalised for having a high median.
 
 ### 1.3 Preflight — 5 seconds
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from ffdraft.cli import main
+from ffdraft.cli import EXPECTED_SOURCES, main
 
 HEADER = "source,player,pos,team,bye,rush_yds,rec,rec_yds\n"
 
@@ -37,8 +37,11 @@ def test_names_the_sources_that_returned_nothing(tmp_path, capsys):
     main(["sources", "--projections", str(path)])
     out = capsys.readouterr().out
     assert "MISSING" in out
-    for absent in ("ESPN", "FantasyPros", "NFL", "RTSports"):
-        assert absent in out
+    # Every source the pull asks for but did not get must be named. Read the
+    # list from the module so trimming a dead source cannot silently rot this.
+    for absent in EXPECTED_SOURCES:
+        if absent != "CBS":
+            assert absent in out, absent
 
 
 def test_flags_a_source_that_is_present_but_thin(tmp_path, capsys):
@@ -102,7 +105,33 @@ def test_scale_check_flags_a_source_on_the_wrong_basis(tmp_path, capsys):
     main(["sources", "--league", "cuomo", "--projections", str(path)])
     out = capsys.readouterr().out
     assert "OFF SCALE" in out
-    assert "RTSports projects on a different scale" in out
+    assert "RTSports is on a different scale" in out
+
+
+def test_scale_check_does_not_punish_a_source_for_covering_only_stars(
+    tmp_path, capsys
+):
+    """The bug this replaced: comparing medians measures depth, not scale.
+
+    A source carrying only the top ten at a position has a median around twice
+    that of one carrying a hundred, purely because of who it covers. Comparing
+    on shared players cancels that out.
+    """
+    path = tmp_path / "proj.csv"
+    rows = []
+    for i in range(100):
+        yards = 1600 - i * 12          # a realistic decline down the board
+        for src in ("CBS", "ESPN"):
+            rows.append(f"{src},Player {i},RB,KC,7,{yards},40,300\n")
+    # A shallow source, agreeing exactly, but only on the top ten.
+    for i in range(10):
+        rows.append(f"FantasyPros,Player {i},RB,KC,7,{1600 - i * 12},40,300\n")
+    _write(path, rows)
+
+    main(["sources", "--league", "cuomo", "--projections", str(path)])
+    out = capsys.readouterr().out
+    assert "OFF SCALE" not in out, out
+    assert "all sources agree on scale" in out
 
 
 def test_scale_check_is_quiet_when_sources_agree(tmp_path, capsys):
