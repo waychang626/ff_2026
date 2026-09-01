@@ -407,6 +407,16 @@ See `docs/research-map.md` for where each research finding lives in the code.
 
 Newest first. Every push updates this section.
 
+### Fix: the first seat got no recommendation
+Reported from a live mock. The console only recommended *after* recording a
+pick, so whoever holds 1.01 opened it, saw the prompt, and got nothing —
+`go` worked, but nothing said so. Recommending is now driven by the loop and
+keyed on `(pick number, board fingerprint)`, which also fixes two cases that
+were failing silently: `undo` and `fix` did not refresh, and ruling a player
+out left the previous recommendation on screen as though it still held.
+Covered by `tests/test_cli_draft_console.py`, which drives the console through
+stdin — the bug was in *when* it acted, not in what the engine computed.
+
 ### Correct League 1's scoring against the settings page
 Checked line by line against Yahoo. Ten of thirteen offensive rules already
 matched. Added **missed PAT at −2**, which is real, expressible, and was simply

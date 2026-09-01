@@ -223,6 +223,7 @@ def cmd_draft(args) -> int:
     suggest_n = 0 if args.no_suggest else args.suggest
     suggestions: list[int] = []
     shown_for: int | None = None
+    recommended_for: tuple | None = None
 
     print(f"{config.name} - seat {config.my_seat} of {config.teams}, "
           f"{config.rounds} rounds, {config.sim.n_sims} sims/pick")
@@ -246,6 +247,19 @@ def cmd_draft(args) -> int:
             )
             shown_for = state.pick_number
 
+        # Recommend from the loop rather than after recording a pick. Doing it
+        # on record missed the case where it is already your turn when the
+        # console opens - seat 1 at pick 1 got no recommendation at all - and
+        # also failed to refresh after `undo`, `fix`, or a projection update.
+        # Keying on the board fingerprint as well as the pick number means
+        # ruling a player out re-runs it, which is the whole point of doing so.
+        if state.on_the_clock == config.my_seat:
+            key = (state.pick_number, board.fingerprint())
+            if recommended_for != key:
+                print()
+                _recommend_now(config, board, state, audit)
+                recommended_for = key
+
         prompt = (
             f"[R{state.current_round} p{state.pick_number} "
             f"{'YOU' if state.on_the_clock == config.my_seat else f'seat {state.on_the_clock}'}]> "
@@ -259,11 +273,17 @@ def cmd_draft(args) -> int:
             continue
 
         try:
-            state, board, done = _handle(
+            state, board, done, refresh = _handle(
                 line, state, board, config, log, log_path, audit, suggestions
             )
             if done:
                 break
+            if refresh:
+                # `undo` and `fix` can land back on a state we have already
+                # recommended for, byte for byte. The recommendation is not
+                # news, but the user just rewound deliberately and is looking
+                # at the console to find out where they now are.
+                recommended_for = None
         except (DraftStateError, ConfigError, KeyError, ValueError) as exc:
             print(f"  ! {exc}")
 
@@ -273,46 +293,51 @@ def cmd_draft(args) -> int:
 
 
 def _handle(line, state, board, config, log, log_path, audit, suggestions=()):
+    """Returns (state, board, done, refresh).
+
+    `refresh` forces the caller to re-issue a recommendation even if the state
+    key is unchanged.
+    """
     lower = line.lower()
     if lower in ("quit", "exit", "q"):
-        return state, board, True
+        return state, board, True, False
     if lower in ("help", "?", "h"):
         print(HELP)
-        return state, board, False
+        return state, board, False, False
     if lower == "save":
         log.save(log_path)
         print(f"  saved {len(log.picks)} picks to {log_path}")
-        return state, board, False
+        return state, board, False, False
     if lower == "undo":
         if not log.picks:
             print("  nothing to undo")
-            return state, board, False
+            return state, board, False, False
         removed = log.picks.pop()
         state = state.undo()
         print(f"  undid pick {removed.pick}: {removed.player_id}")
-        return state, board, False
+        return state, board, False, True
     if lower.startswith("log"):
         parts = line.split()
         _show_log(board, state, config, int(parts[1]) if len(parts) > 1 else 12)
-        return state, board, False
+        return state, board, False, False
     if lower.startswith("fix "):
         state = _fix_pick(line, state, board, log, log_path)
-        return state, board, False
+        return state, board, False, True
     if lower.startswith("roster"):
         parts = line.split()
         seat = int(parts[1]) if len(parts) > 1 else config.my_seat
         _show_roster(board, state, seat, config)
-        return state, board, False
+        return state, board, False, False
     if lower.startswith("board"):
         parts = line.split()
         _show_available(board, state, config, parts[1].upper() if len(parts) > 1 else None)
-        return state, board, False
+        return state, board, False, False
     if lower in ("go", "rec", "."):
         _recommend_now(config, board, state, audit)
-        return state, board, False
+        return state, board, False, False
     if lower.startswith("out ") or lower.startswith("bump "):
         board = _apply_update(line, board, state, config, audit)
-        return state, board, False
+        return state, board, False, False
 
     # Otherwise: a pick.
     mine = False
@@ -327,38 +352,34 @@ def _handle(line, state, board, config, log, log_path, audit, suggestions=()):
         choice = int(text.strip())
         if not 1 <= choice <= len(suggestions):
             print(f"  ! pick a number from 1 to {len(suggestions)}, or type a name")
-            return state, board, False
+            return state, board, False, False
         player = board.players[suggestions[choice - 1]]
     else:
         resolution = board.resolver.resolve(text)
         if not resolution.found:
             print(f"  ! {resolution.note}")
-            return state, board, False
+            return state, board, False, False
         if resolution.ambiguous:
             print(f"  ! {resolution.note}")
             print("    say which one - add the position (e.g. 'josh QB') "
                   "or type the full name")
-            return state, board, False
+            return state, board, False, False
         player = resolution.best
     if player.player_id in state.drafted:
         print(f"  ! {player.display} was already taken at pick "
               f"{state.drafted.index(player.player_id) + 1}")
-        return state, board, False
+        return state, board, False, False
 
     seat = state.on_the_clock
     if mine and seat != config.my_seat:
         print(f"  ! seat {seat} is on the clock, not you (seat {config.my_seat})")
-        return state, board, False
+        return state, board, False, False
 
     pick_no = state.pick_number
     state = state.record(player.player_id)
     log.append(player.player_id, seat=seat)
     print(f"  {pick_no}. seat {seat}: {player.display}")
-
-    if not state.is_complete and state.on_the_clock == config.my_seat:
-        print()
-        _recommend_now(config, board, state, audit)
-    return state, board, False
+    return state, board, False, False
 
 
 def _recommend_now(config, board, state, audit) -> None:
