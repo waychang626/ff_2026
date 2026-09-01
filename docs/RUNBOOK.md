@@ -127,6 +127,8 @@ don't have to ask for it.
 | `me josh allen` | Records the pick as yours |
 | `go` | Re-run the recommendation for your current pick |
 | `undo` | Take back the last pick |
+| `log` / `log 20` | Recent picks **with their numbers** |
+| `fix 40 josh allen` | Correct pick 40, leaving every other pick alone |
 | `roster` / `roster 3` | Show your roster / seat 3's roster |
 | `board` / `board RB` | Best available overall / at a position |
 | `out <name> : <reason>` | Rule a player out for the season |
@@ -136,6 +138,26 @@ don't have to ask for it.
 | `quit` | Exit (saves first) |
 
 Names are fuzzy. `bijan`, `lions d`, `jamarr`, `harrison jr` all work.
+
+### Fixing a pick you got wrong
+
+`undo` only reaches the **last** pick. The usual mistake is noticing at pick 45
+that pick 40 went in as the wrong Josh — undoing five picks to fix one, under a
+clock, makes the log worse.
+
+```
+log            # find the number
+fix 40 josh allen
+```
+
+It refuses to create a duplicate, refuses a pick number that isn't in the log,
+and records what it changed in the pick log. Everything downstream —
+replacement level, survival, your roster — recomputes from the corrected state.
+
+If a player was entered who was never actually drafted, `fix` him to whoever
+really went there. There is no "delete a pick" — the pick happened, someone got
+picked, and a log with a hole in it would put every later pick on the wrong
+seat.
 
 ### Timing
 

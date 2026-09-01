@@ -62,6 +62,30 @@ def undo_last_pick() -> dict[str, Any]:
     return _session().undo()
 
 
+def recent_picks(count: int = 12) -> dict[str, Any]:
+    """List the most recent picks with their pick numbers.
+
+    Call this before correct_pick, to find the number of the pick to fix.
+
+    Args:
+        count: How many recent picks to list.
+    """
+    return _session().recent_picks(count)
+
+
+def correct_pick(pick_number: int, player_id: str) -> dict[str, Any]:
+    """Replace one already-recorded pick with the right player.
+
+    Use this when a name was resolved to the wrong player and it is too far
+    back for undo_last_pick to reach. Every other pick is left alone.
+
+    Args:
+        pick_number: The overall pick number to correct, from recent_picks.
+        player_id: An exact ID returned by resolve_player.
+    """
+    return _session().correct_pick(pick_number, player_id)
+
+
 def get_draft_state() -> dict[str, Any]:
     """Where the draft is: pick on the clock, round, whose turn, the user's roster."""
     return _session().state_summary()
@@ -111,6 +135,8 @@ TOOL_FUNCTIONS = [
     resolve_player,
     record_pick,
     undo_last_pick,
+    recent_picks,
+    correct_pick,
     get_draft_state,
     recommend,
     update_projection,

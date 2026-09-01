@@ -152,6 +152,38 @@ class DraftState:
             my_seat=self.my_seat,
         )
 
+    def replace(self, pick_number: int, player_id: str) -> "DraftState":
+        """Correct one already-recorded pick, leaving every other pick alone.
+
+        `undo` only reaches the most recent pick. The common draft-room error
+        is noticing at pick 45 that pick 40 went in as the wrong Josh - undoing
+        five picks to fix one, under a clock, is how a log gets worse instead
+        of better.
+        """
+        if not (1 <= pick_number <= len(self.drafted)):
+            raise DraftStateError(
+                f"pick {pick_number} is not in the log; "
+                f"{len(self.drafted)} pick(s) recorded so far"
+            )
+        current = self.drafted[pick_number - 1]
+        if player_id == current:
+            raise DraftStateError(f"pick {pick_number} is already {player_id}")
+        clash = next(
+            (
+                n for n, pid in enumerate(self.drafted, start=1)
+                if pid == player_id and n != pick_number
+            ),
+            None,
+        )
+        if clash is not None:
+            raise DraftStateError(
+                f"{player_id} is already recorded at pick {clash}. Fix that one "
+                f"first, or you will have him drafted twice."
+            )
+        updated = list(self.drafted)
+        updated[pick_number - 1] = player_id
+        return DraftState(config=self.config, drafted=updated, my_seat=self.my_seat)
+
     def undo(self) -> "DraftState":
         if not self.drafted:
             raise DraftStateError("nothing to undo")

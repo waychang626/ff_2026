@@ -101,6 +101,47 @@ class DraftSession:
         return {"ok": True, "removed": removed.player_id if removed else None,
                 "pick_on_the_clock": self.state.pick_number}
 
+    def correct_pick(self, pick_number: int, player_id: str) -> dict[str, Any]:
+        """Fix one already-recorded pick without disturbing the others."""
+        if player_id not in self.board.index:
+            return {"ok": False, "reason": f"{player_id} is not on the board"}
+        was = (
+            self.state.drafted[pick_number - 1]
+            if 1 <= pick_number <= len(self.state.drafted)
+            else None
+        )
+        try:
+            self.state = self.state.replace(pick_number, player_id)
+        except DraftStateError as exc:
+            return {"ok": False, "reason": str(exc)}
+        self.log.picks[pick_number - 1].player_id = player_id
+        self.log.picks[pick_number - 1].note = f"corrected from {was}"
+        self.log.save(self.log_path)
+        return {
+            "ok": True,
+            "pick": pick_number,
+            "was": self.board.player(was).display if was else None,
+            "now": self.board.player(player_id).display,
+        }
+
+    def recent_picks(self, count: int = 12) -> dict[str, Any]:
+        """The tail of the log with pick numbers, so a correction can be aimed."""
+        from ..draft import pick_owner
+
+        rows = list(enumerate(self.state.drafted, start=1))[-max(count, 1):]
+        return {
+            "ok": True,
+            "picks": [
+                {
+                    "pick": n,
+                    "seat": pick_owner(n, self.config.teams, self.config.draft_type),
+                    "player": self.board.player(pid).display,
+                    "player_id": pid,
+                }
+                for n, pid in rows
+            ],
+        }
+
     def state_summary(self) -> dict[str, Any]:
         roster = [self.board.player(p).display for p in self.state.my_roster]
         return {

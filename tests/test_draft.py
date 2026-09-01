@@ -87,3 +87,29 @@ def test_unfilled_mandatory_slots_tracks_what_must_still_be_drafted(cuomo_config
 
     # Extra bodies at a position do not create new obligations.
     assert "QB" not in unfilled_mandatory_slots(["QB", "QB", "QB"], cuomo_config)
+
+
+def test_replace_corrects_one_pick_and_leaves_the_rest(cuomo_config):
+    """`undo` only reaches the last pick; the wrong Josh is usually further back."""
+    state = DraftState(config=cuomo_config, drafted=["a|RB", "b|WR", "c|QB"], my_seat=1)
+    fixed = state.replace(2, "z|TE")
+    assert fixed.drafted == ["a|RB", "z|TE", "c|QB"]
+    assert state.drafted == ["a|RB", "b|WR", "c|QB"], "must not mutate in place"
+
+
+def test_replace_refuses_to_create_a_duplicate(cuomo_config):
+    state = DraftState(config=cuomo_config, drafted=["a|RB", "b|WR"], my_seat=1)
+    with pytest.raises(DraftStateError, match="already recorded at pick 1"):
+        state.replace(2, "a|RB")
+
+
+def test_replace_refuses_a_pick_number_outside_the_log(cuomo_config):
+    state = DraftState(config=cuomo_config, drafted=["a|RB"], my_seat=1)
+    with pytest.raises(DraftStateError, match="not in the log"):
+        state.replace(7, "z|TE")
+
+
+def test_replace_refuses_a_no_op(cuomo_config):
+    state = DraftState(config=cuomo_config, drafted=["a|RB"], my_seat=1)
+    with pytest.raises(DraftStateError, match="already"):
+        state.replace(1, "a|RB")

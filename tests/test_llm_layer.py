@@ -175,3 +175,33 @@ def test_the_session_snapshot_records_every_update(session, sample_board):
     snapshot = session.snapshot()
     assert len(snapshot["updates"]) == 1
     assert "limited in practice" in snapshot["updates"][0]
+
+
+def test_correcting_an_earlier_pick_leaves_the_others_alone(session, sample_board):
+    for player in sample_board.players[:4]:
+        session.record(player.player_id)
+    right = sample_board.players[40].player_id
+
+    result = session.correct_pick(2, right)
+    assert result["ok"]
+    assert result["was"] == sample_board.players[1].display
+    assert session.state.drafted[1] == right
+    assert session.state.drafted[0] == sample_board.players[0].player_id
+    assert session.state.drafted[3] == sample_board.players[3].player_id
+    assert len(session.state.drafted) == 4
+
+
+def test_a_correction_that_would_duplicate_is_refused(session, sample_board):
+    for player in sample_board.players[:3]:
+        session.record(player.player_id)
+    result = session.correct_pick(3, sample_board.players[0].player_id)
+    assert not result["ok"]
+    assert "already recorded at pick 1" in result["reason"]
+
+
+def test_recent_picks_gives_the_model_numbers_to_aim_at(session, sample_board):
+    for player in sample_board.players[:5]:
+        session.record(player.player_id)
+    rows = session.recent_picks(3)["picks"]
+    assert [r["pick"] for r in rows] == [3, 4, 5]
+    assert all("seat" in r and "player_id" in r for r in rows)

@@ -20,7 +20,7 @@ from .baselines import explain as explain_baselines
 from .board import Board, ProjectionUpdate
 from .config import ConfigError, LeagueConfig, load_by_id
 from .data import DEFAULT_POOL, build_board_for, default_paths
-from .draft import DraftState, DraftStateError
+from .draft import DraftState, DraftStateError, pick_owner
 from .engine import _recommend
 from .ids import POSITIONS
 from .replay import DraftLog, assert_deterministic, backtest, load_actuals, replay
@@ -184,6 +184,8 @@ HELP = """
   me <name>         record a pick as yours
   go                get a recommendation for the pick on the clock
   undo              take back the last pick
+  log [n]           show the last n picks with their numbers
+  fix <n> <name>    correct pick n (use when a name resolved to the wrong guy)
   roster [seat]     show a roster
   board [pos]       show the best available
   out <name> : <r>  rule a player out for the season, with a reason
@@ -251,6 +253,13 @@ def _handle(line, state, board, config, log, log_path, audit):
         removed = log.picks.pop()
         state = state.undo()
         print(f"  undid pick {removed.pick}: {removed.player_id}")
+        return state, board, False
+    if lower.startswith("log"):
+        parts = line.split()
+        _show_log(board, state, config, int(parts[1]) if len(parts) > 1 else 12)
+        return state, board, False
+    if lower.startswith("fix "):
+        state = _fix_pick(line, state, board, log, log_path)
         return state, board, False
     if lower.startswith("roster"):
         parts = line.split()
@@ -321,6 +330,58 @@ def _recommend_now(config, board, state, audit) -> None:
         print(f"  {rec.rank:<3}{rec.display[:27]:<28}{rec.vor:7.1f}{surv:>7}"
               f"{rec.p_title:10.2%}{rec.delta_p_title * 100:+8.2f}")
     print()
+
+
+def _show_log(board, state, config, count: int) -> None:
+    """Recent picks with their numbers, so `fix` has something to aim at."""
+    picks = list(enumerate(state.drafted, start=1))[-max(count, 1):]
+    if not picks:
+        print("  no picks yet")
+        return
+    for n, pid in picks:
+        seat = pick_owner(n, config.teams, config.draft_type)
+        mine = " <- you" if seat == config.my_seat else ""
+        print(f"  {n:>4}. seat {seat:<3} {board.player(pid).display}{mine}")
+
+
+def _fix_pick(line, state, board, log, log_path):
+    """`fix <pick number> <name>` - correct one recorded pick in place.
+
+    The failure this exists for: you type `josh`, it resolves to the wrong
+    Josh, and you notice four picks later. Undoing back to it would throw away
+    four correct picks under a clock.
+    """
+    parts = line.split(None, 2)
+    if len(parts) < 3:
+        print("  ! usage: fix <pick number> <name>   (try `log` to find the number)")
+        return state
+    try:
+        number = int(parts[1])
+    except ValueError:
+        print(f"  ! {parts[1]!r} is not a pick number. Try `log` to find it.")
+        return state
+
+    resolution = board.resolver.resolve(parts[2])
+    if not resolution.found:
+        print(f"  ! {resolution.note}")
+        return state
+    if resolution.ambiguous:
+        print(f"  ! {resolution.note}")
+        return state
+
+    was = state.drafted[number - 1] if 1 <= number <= len(state.drafted) else None
+    try:
+        state = state.replace(number, resolution.best.player_id)
+    except DraftStateError as exc:
+        print(f"  ! {exc}")
+        return state
+
+    log.picks[number - 1].player_id = resolution.best.player_id
+    log.picks[number - 1].note = f"corrected from {was}"
+    log.save(log_path)
+    print(f"  pick {number}: {board.player(was).display} -> "
+          f"{resolution.best.display}")
+    return state
 
 
 def _show_roster(board, state, seat, config) -> None:
