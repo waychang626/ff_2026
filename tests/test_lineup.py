@@ -113,3 +113,67 @@ def test_lineup_slots_never_starts_a_player_twice(seated_config):
     filled = lineup_slots(scores, positions, seated_config.roster)
     used = [p for p in filled.values() if p is not None]
     assert len(used) == len(set(used))
+
+
+def test_marginal_reduces_to_vor_on_an_empty_roster(seated_config, sample_board):
+    """The bug this guards: marginal silently degenerating into raw points.
+
+    On an empty roster every player improves the lineup by exactly his own
+    projection, so an unadjusted "lineup improvement" measure IS raw projected
+    points - the cross-position bias VOR exists to remove. In the superflex
+    league that put four quarterbacks in the top six of the shortlist while
+    running backs with higher VOR sat below them.
+    """
+    import numpy as np
+
+    from ffdraft.vor import replacement_points, roster_marginal, vor_array
+
+    available = np.ones(len(sample_board), dtype=bool)
+    vor = vor_array(sample_board, available, seated_config.vor_baseline)
+    replacement = replacement_points(sample_board, available, seated_config.vor_baseline)
+
+    for i in range(0, len(sample_board), 17):
+        pid = sample_board.players[i].player_id
+        marginal = roster_marginal(sample_board, [], pid, seated_config, replacement)
+        assert marginal == pytest.approx(float(vor[i]), abs=1e-6), pid
+
+
+def test_a_quarterback_does_not_outrank_a_higher_vor_back(seated_config, sample_board):
+    """The symptom, stated directly: superflex is not a licence to stack QBs."""
+    import numpy as np
+
+    from ffdraft.vor import candidate_shortlist
+
+    available = np.ones(len(sample_board), dtype=bool)
+    shortlist = candidate_shortlist(sample_board, available, seated_config, [], 6)
+    positions = [sample_board.pos_of(i) for i in shortlist]
+    assert positions.count("QB") <= 2, positions
+    assert positions[0] in ("RB", "WR"), positions
+
+
+def test_the_superflex_second_quarterback_still_counts(seated_config, sample_board):
+    """...but the second one does fill a slot, and must not be zeroed.
+
+    The QBs are taken in scoring order deliberately. Held out of order, a
+    "third" QB who outscores the second is a genuine upgrade to the superflex
+    slot and correctly scores above zero - which is right, and is not what this
+    test is about.
+    """
+    import numpy as np
+
+    from ffdraft.vor import replacement_points, roster_marginal
+
+    available = np.ones(len(sample_board), dtype=bool)
+    replacement = replacement_points(sample_board, available, seated_config.vor_baseline)
+    qbs = sorted(
+        (p.player_id for p in sample_board.players if p.pos == "QB"),
+        key=lambda pid: -sample_board.points[sample_board.idx(pid)],
+    )[:3]
+
+    first = roster_marginal(sample_board, [], qbs[0], seated_config, replacement)
+    second = roster_marginal(sample_board, [qbs[0]], qbs[1], seated_config, replacement)
+    third = roster_marginal(sample_board, qbs[:2], qbs[2], seated_config, replacement)
+
+    assert first > 0 and second > 0, "superflex starts two QBs"
+    assert first > second, "the second QB fills a flex, not the QB slot"
+    assert third == pytest.approx(0.0), "a worse third QB upgrades nothing"
