@@ -141,3 +141,21 @@ def test_rollout_is_deterministic_given_the_same_rankings(sim, sample_board):
     a = sim.rollout([], value, rankings)
     b = sim.rollout([], value, rankings)
     assert np.array_equal(a.rosters, b.rosters)
+
+
+def test_next_selection_drives_a_mock_draft_without_repeats(sim, sample_board):
+    """The mock console picks one at a time; it must agree with a full rollout."""
+    rng = np.random.default_rng(5)
+    rankings = sim.base_rankings(rng, 1)
+    value = -np.argsort(np.argsort(sample_board.adp)).astype(float)
+
+    drafted: list[int] = []
+    for _ in range(20):
+        idx = sim.next_selection(drafted, value, rankings)
+        assert idx not in drafted, "next_selection returned an already-drafted player"
+        drafted.append(idx)
+
+    # Same rankings and same state must give the same pick every time.
+    assert sim.next_selection(drafted, value, rankings) == sim.next_selection(
+        drafted, value, rankings
+    )

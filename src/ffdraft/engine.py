@@ -24,6 +24,7 @@ the room.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,7 +36,7 @@ from .config import LeagueConfig, load_by_id
 from .data import build_board_for, default_paths
 from .draft import DraftState, DraftStateError, unfilled_mandatory_slots
 from .ids import POSITIONS
-from .opponents import DraftSimulator
+from .opponents import DraftSimulator, mandatory_slots
 from .simulate import SeasonSimulator, draw_season
 from .vor import (
     candidate_shortlist,
@@ -129,10 +130,31 @@ class PickAdvice:
         else:
             lines.append(f"EDGE: {top.vor:+.1f} VOR over replacement")
         lines.append(f"WHY:  {self.why_line()}")
-        flags = [f for r in self.recommendations[:1] for f in r.flags] + self.notes
-        if flags:
-            lines.append(f"FLAG: {'; '.join(flags[:2])}")
+        flag = self.flag_line()
+        if flag:
+            lines.append(f"FLAG: {flag}")
         return "\n".join(lines)
+
+    # Notes that are true every time and tell you nothing. Withholding kickers
+    # in round 3 is the policy working, not a caveat; putting it on the card
+    # every round trains you to stop reading the FLAG line, which is the one
+    # line that occasionally matters.
+    ROUTINE_NOTES = ("withheld until round", "already at ")
+    FLAG_WIDTH = 104
+
+    def flag_line(self) -> str:
+        """The caveats worth a reader's attention, trimmed to one line."""
+        flags = list(self.recommendations[0].flags) if self.recommendations else []
+        flags += [
+            n for n in self.notes
+            if not any(marker in n for marker in self.ROUTINE_NOTES)
+        ]
+        if not flags:
+            return ""
+        text = "; ".join(flags[:2])
+        if len(text) > self.FLAG_WIDTH:
+            text = text[: self.FLAG_WIDTH - 3].rstrip() + "..."
+        return text
 
     def why_line(self) -> str:
         top = self.recommendations[0]
@@ -254,12 +276,11 @@ def _recommend(
     vor = vor_array(board, available, config.vor_baseline)
     replacement = replacement_points(board, available, config.vor_baseline)
 
-    notes: list[str] = []
+    selectable, notes = _selectable_mask(board, config, state, my_roster, available)
     shortlist = candidate_shortlist(
-        board, available, config, my_roster, config.sim.candidate_pool
+        board, available, config, my_roster, config.sim.candidate_pool,
+        selectable=selectable,
     )
-    shortlist, guard_notes = _apply_policy_guard(board, config, state, my_roster, shortlist, available)
-    notes.extend(guard_notes)
 
     if not shortlist:
         advice = PickAdvice(
@@ -413,59 +434,77 @@ def _infer_seat(state: DraftState, my_roster: list[str], config: LeagueConfig) -
     return candidates[0]
 
 
-def _apply_policy_guard(
+def _selectable_mask(
     board: Board,
     config: LeagueConfig,
     state: DraftState,
     my_roster: list[str],
-    shortlist: list[int],
     available: np.ndarray,
-) -> tuple[list[int], list[str]]:
-    """Section 3.5: keep K and DST out of the shortlist until they are forced.
+) -> tuple[np.ndarray, list[str]]:
+    """Who this roster may legally take, as a mask over the board.
 
-    The three most common roster builds are ~60% of all teams and all win about
-    half their games; the builds that beat 50% carried more RB/WR at the
-    expense of K and DST. The guard releases automatically the moment the picks
-    you have left equal the mandatory slots you still have to fill, so the
-    roster is always legal at the end.
+    Applied *before* shortlisting rather than after. Filtering a shortlist
+    after the fact has a failure mode that shows up exactly when it matters:
+    late in the draft the top twelve by VOR can be entirely kickers and
+    defenses, every one gets blocked, and the guard falls back to the
+    unfiltered list - handing you the backup kicker it was written to prevent.
+
+    Two rules, both from section 3.5:
+
+      cap    Never more K or DST than the lineup starts. A second kicker cannot
+             start, cannot be flexed, and is the roster slot the builds that
+             beat 50% spent on RB/WR depth instead.
+      floor  No K or DST before its configured round, unless forced.
+
+    The floor releases automatically the moment the picks you have left equal
+    the mandatory slots you still have to fill, so the roster is always legal
+    at the end.
     """
     notes: list[str] = []
     roster_positions = [board.player(p).pos for p in my_roster]
     unfilled = unfilled_mandatory_slots(roster_positions, config)
     picks_left = config.rounds - len(my_roster)
-    must_fill_now = sum(unfilled.values()) >= picks_left
 
-    if must_fill_now and unfilled:
-        forced = [i for i in shortlist if board.pos_of(i) in unfilled]
-        if not forced:
-            live = np.flatnonzero(available)
-            forced = [
-                int(i) for i in live[np.argsort(-board.points[live], kind="stable")]
-                if board.pos_of(int(i)) in unfilled
-            ][: config.sim.candidate_pool]
+    pos_of = np.array([POSITIONS[c] for c in board.pos_code], dtype=object)
+
+    # Endgame: the remaining picks are exactly the slots still to fill.
+    if unfilled and sum(unfilled.values()) >= picks_left:
+        forced = np.isin(pos_of, list(unfilled))
         notes.append(
-            f"roster must still fill {dict(unfilled)} with {picks_left} pick(s) left; "
-            f"restricted to those positions"
+            f"roster must still fill {dict(unfilled)} with {picks_left} pick(s) "
+            f"left; restricted to those positions"
         )
-        return forced, notes
+        mask = available & forced
+        return (mask if mask.any() else available), notes
 
+    mandatory = mandatory_slots(config)
+    caps = {"K": mandatory.get("K", 1), "DST": mandatory.get("DST", 1)}
+    have = Counter(roster_positions)
     floors = {"K": config.policy.min_round_k, "DST": config.policy.min_round_dst}
-    kept = []
-    blocked = set()
-    for i in shortlist:
-        pos = board.pos_of(i)
-        floor = floors.get(pos)
-        if floor is not None and state.current_round < floor:
-            blocked.add(pos)
-            continue
-        kept.append(i)
-    if blocked:
+
+    mask = available.copy()
+    blocked_full, blocked_early = set(), set()
+    for pos, cap in caps.items():
+        if have[pos] >= cap:
+            mask &= pos_of != pos
+            blocked_full.add(pos)
+        elif state.current_round < floors[pos]:
+            mask &= pos_of != pos
+            blocked_early.add(pos)
+
+    if blocked_early:
         notes.append(
-            f"{'/'.join(sorted(blocked))} withheld until round "
-            f"{min(floors[p] for p in blocked)} (brief 3.5: winning builds spend "
-            f"those slots on RB/WR)"
+            f"{'/'.join(sorted(blocked_early))} withheld until round "
+            f"{min(floors[p] for p in blocked_early)} (brief 3.5: winning builds "
+            f"spend those slots on RB/WR)"
         )
-    return kept or shortlist, notes
+    if blocked_full:
+        detail = ", ".join(f"{p} {have[p]}/{caps[p]}" for p in sorted(blocked_full))
+        notes.append(f"already at {detail}; another cannot start, so it is excluded")
+
+    if not mask.any():
+        return available, notes
+    return mask, notes
 
 
 def _rank(
@@ -516,8 +555,8 @@ def _rank(
     note = ""
     if len(tied) > 1:
         note = (
-            f"{len(tied)} candidates are within simulation noise on title odds "
-            f"({n_sims} sims); ordered by cost of waiting instead"
+            f"{len(tied)} tied on title odds ({n_sims} sims); "
+            f"ordered by cost of waiting"
         )
     return tied + rest, tie_group, note
 

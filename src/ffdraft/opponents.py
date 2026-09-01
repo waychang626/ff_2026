@@ -242,6 +242,35 @@ class DraftSimulator:
 
         return RolloutResult(rosters=rosters, available_at=snapshots, n_sims=n_sims)
 
+    def next_selection(
+        self,
+        drafted_idx: list[int],
+        my_value: np.ndarray,
+        base_rankings: np.ndarray,
+    ) -> int:
+        """The single pick the model makes next from this state.
+
+        Runs one rollout and keeps only its first new pick. Wasteful in
+        principle - it simulates the whole remaining draft to use one pick of
+        it - but a single-simulation rollout costs a few milliseconds, and
+        reusing the rollout means a mock draft and a real recommendation are
+        driven by exactly the same opponent model rather than by two
+        implementations that can drift apart.
+
+        `base_rankings` must be the same array across the whole mock, so each
+        simulated team keeps consistent preferences from round to round.
+        """
+        result = self.rollout(drafted_idx, my_value, base_rankings[:1])
+        target = len(drafted_idx) + 1
+        fill = {team: 0 for team in range(self.config.teams)}
+        for pick in range(1, self.config.total_drafted + 1):
+            seat = pick_owner(pick, self.config.teams, self.config.draft_type) - 1
+            idx = int(result.rosters[0, seat, fill[seat]])
+            fill[seat] += 1
+            if pick == target:
+                return idx
+        raise ValueError(f"no pick {target} in a {self.config.total_drafted}-pick draft")
+
     def _herd_mask(self, last_pos: np.ndarray, pick: int) -> np.ndarray | None:
         """(n_sims, n_players) 1.0 where the previous pick makes this player hotter."""
         opp = self.config.opponents

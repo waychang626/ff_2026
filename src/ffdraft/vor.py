@@ -169,15 +169,21 @@ def candidate_shortlist(
     config: LeagueConfig,
     my_roster: list[str],
     size: int,
+    selectable: np.ndarray | None = None,
 ) -> list[int]:
     """Board indices worth paying for a Monte Carlo evaluation of.
 
     Ranked by VOR blended with team need so a shortlist is never all one
     position when the roster already has three of them. This is a *filter*,
     not the decision - the ranking that matters comes out of the simulator.
+
+    `available` is who is left on the board and sets replacement level.
+    `selectable` is who *this* roster may legally take, which is a subset once
+    the K/DST caps bite. Keeping them separate matters: replacement level has
+    to reflect the real board even for a position you are barred from adding.
     """
     vor = vor_array(board, available, config.vor_baseline)
-    live = np.flatnonzero(available)
+    live = np.flatnonzero(available if selectable is None else selectable)
     if live.size == 0:
         return []
 

@@ -160,3 +160,85 @@ def test_card_is_four_lines_with_the_required_prefixes(seated_config, sample_boa
     assert any(l.startswith("WHY:  ") for l in lines)
     for line in lines:
         assert len(line) < 160
+
+
+# --- the K/DST cap (brief 3.5, the part the round floors miss) --------------
+def _state_with(config, board, seat, my_positions, upto_pick):
+    """Build a consistent (drafted, my_roster) pair for a late-draft pick.
+
+    Seat `seat` gets one player per position named in `my_positions`, then
+    filler; every other seat gets distinct filler. Constructing the pick list
+    directly is the only way to get a late-round state the engine will accept,
+    since it cross-checks my_roster against the log.
+    """
+    from ffdraft.draft import pick_owner, seat_picks
+
+    mine_needed = seat_picks(seat, config.teams, config.rounds).index(upto_pick)
+    used: set[str] = set()
+
+    mine: list[str] = []
+    for pos in my_positions:
+        pick = next(
+            pl.player_id for pl in board.players
+            if pl.pos == pos and pl.player_id not in used
+        )
+        used.add(pick)
+        mine.append(pick)
+    for pl in board.players:
+        if len(mine) >= mine_needed:
+            break
+        if pl.player_id not in used and pl.pos not in ("K", "DST"):
+            used.add(pl.player_id)
+            mine.append(pl.player_id)
+
+    others = [
+        pl.player_id for pl in board.players if pl.player_id not in used
+    ][: upto_pick - 1 - mine_needed]
+
+    mine_iter, other_iter = iter(mine), iter(others)
+    drafted = [
+        next(mine_iter)
+        if pick_owner(n, config.teams, config.draft_type) == seat
+        else next(other_iter)
+        for n in range(1, upto_pick)
+    ]
+    return drafted, mine
+
+
+def test_a_second_kicker_or_defense_is_never_offered(seated_config, sample_board, quiet_log):
+    """The round floors stop K/DST early; nothing stopped a *third* one late.
+
+    A backup kicker cannot start and cannot be flexed. Late in the draft his
+    VOR still beats the 60th receiver's, so a shortlist ranked on VOR alone
+    hands him to you - which is exactly the roster slot section 3.5 found the
+    winning builds spending on RB/WR depth instead. Caught by a mock draft
+    that filled its whole bench with kickers and defenses.
+    """
+    from ffdraft.draft import seat_picks
+
+    target = seat_picks(3, seated_config.teams, seated_config.rounds)[-2]
+    drafted, mine = _state_with(
+        seated_config, sample_board, 3, ["K", "DST"], target
+    )
+    held = [sample_board.player(p).pos for p in mine]
+    assert held.count("K") == 1 and held.count("DST") == 1
+
+    advice = advise(seated_config, sample_board, drafted, mine, target, quiet_log)
+    assert advice.recommendations
+    offered = {r.pos for r in advice.recommendations}
+    assert not offered & {"K", "DST"}, (
+        f"offered a duplicate K/DST: {[(r.name, r.pos) for r in advice.recommendations]}"
+    )
+
+
+def test_the_flag_line_stays_readable_under_a_pick_clock(
+    seated_config, sample_board, quiet_log
+):
+    """Routine policy notes are suppressed; whatever survives is trimmed."""
+    drafted = [p.player_id for p in sample_board.players[:2]]
+    advice = advise(seated_config, sample_board, drafted, [], 3, quiet_log)
+    assert len(advice.flag_line()) <= advice.FLAG_WIDTH
+    # "K withheld until round 15" is the policy working, not a caveat.
+    assert "withheld until round" not in advice.flag_line()
+    # ...but it is still recorded for the log.
+    assert any("withheld until round" in n for n in advice.notes)

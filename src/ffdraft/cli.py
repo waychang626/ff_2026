@@ -421,6 +421,157 @@ def cmd_llm(args) -> int:
     return run_console(session, model=args.model)
 
 
+
+MOCK_HELP = """
+  <enter>           take the engine's #1 pick
+  <name>            take someone else instead
+  board [pos]       show the best available
+  roster            show your roster so far
+  auto              let the engine finish the draft for you
+  quit              stop here
+"""
+
+
+def cmd_mock(args) -> int:
+    """Practice draft. The opponent model fills every other seat.
+
+    The point is not the resulting roster - it is getting the console into your
+    fingers before a clock is running. Everything behaves exactly as it does in
+    a real draft except that you do not have to type the other 143 picks.
+    """
+    import numpy as np
+
+    from .opponents import DraftSimulator
+
+    if args.sims is None:
+        # Practice should move quickly: 13 recommendations at the real-draft
+        # setting is several minutes of waiting to rehearse typing.
+        args.sims = 800
+    config, board = _load(args)
+    if config.my_seat is None:
+        raise SystemExit("set draft.my_seat in the config or pass --seat")
+
+    seat = config.my_seat
+    rng = np.random.default_rng(args.seed)
+    simulator = DraftSimulator(board, config, seat)
+    rankings = simulator.base_rankings(rng, 1)
+
+    audit = AuditLog(args.audit) if args.audit else AuditLog()
+    log = DraftLog(league_id=config.league_id, my_seat=seat)
+    log_path = Path(args.out or f"logs/mock_{config.league_id}.jsonl")
+    state = DraftState(config=config, drafted=[], my_seat=seat)
+    auto = args.auto
+
+    print(f"MOCK - {config.name}, seat {seat} of {config.teams}, "
+          f"{config.rounds} rounds, {config.sim.n_sims} sims/pick")
+    print("Opponents are simulated. Nothing here touches your real draft log.")
+    if not auto:
+        print(MOCK_HELP)
+
+    while not state.is_complete:
+        drafted_idx = [board.idx(p) for p in state.drafted]
+        if state.on_the_clock != seat:
+            # Value used by the model's stand-in for future picks by any seat.
+            value = vor_array(board, _available(board, state), config.vor_baseline)
+            idx = simulator.next_selection(drafted_idx, value, rankings)
+            pid = board.players[idx].player_id
+            picking_seat = state.on_the_clock
+            print(f"  {state.pick_number:>4}. seat {picking_seat}: "
+                  f"{board.player(pid).display}")
+            state = state.record(pid)
+            log.append(pid, seat=picking_seat)
+            continue
+
+        advice = _recommend(
+            config, board, list(state.drafted), state.my_roster,
+            state.pick_number, audit=audit,
+        )
+        print()
+        print(f"  --- YOUR PICK (round {state.current_round}, overall "
+              f"{state.pick_number}) ---")
+        print(advice.format_card())
+        print()
+        for rec in advice.recommendations[:3]:
+            surv = f"{rec.survival:.0%}" if rec.survival == rec.survival else "  -"
+            print(f"  {rec.rank}. {rec.display[:30]:<31}VOR {rec.vor:6.1f}  "
+                  f"survives {surv:>4}  P(title) {rec.p_title:.1%}")
+
+        choice = None
+        while choice is None:
+            if auto:
+                choice = advice.recommendations[0].player_id
+                break
+            try:
+                line = input("\n  pick> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                line = "quit"
+            low = line.lower()
+            if low in ("quit", "exit", "q"):
+                _finish(board, state, config, log, log_path, stopped=True)
+                return 0
+            if low == "auto":
+                auto = True
+                choice = advice.recommendations[0].player_id
+                break
+            if low == "roster":
+                _show_roster(board, state, seat, config)
+                continue
+            if low.startswith("board"):
+                parts = line.split()
+                _show_available(board, state, config,
+                                parts[1].upper() if len(parts) > 1 else None)
+                continue
+            if not line:
+                choice = advice.recommendations[0].player_id
+                break
+            resolution = board.resolver.resolve(line)
+            if not resolution.found or resolution.ambiguous:
+                print(f"  ! {resolution.note or 'no match'}")
+                continue
+            if resolution.best.player_id in state.drafted:
+                print(f"  ! {resolution.best.display} is already gone")
+                continue
+            choice = resolution.best.player_id
+
+        print(f"  -> you take {board.player(choice).display}\n")
+        state = state.record(choice)
+        log.append(choice, seat=seat)
+
+    _finish(board, state, config, log, log_path, stopped=False)
+    return 0
+
+
+def _available(board, state):
+    import numpy as np
+
+    mask = np.ones(len(board), dtype=bool)
+    for pid in state.drafted:
+        mask[board.idx(pid)] = False
+    return mask
+
+
+def _finish(board, state, config, log, log_path, stopped: bool) -> None:
+    from .lineup import best_lineup_points
+
+    log.save(log_path)
+    roster = state.roster_of(config.my_seat)
+    print("\n" + "=" * 58)
+    print("MOCK COMPLETE" if not stopped else "MOCK STOPPED EARLY")
+    print("=" * 58)
+    if not roster:
+        print("  no picks made")
+        return
+    _show_roster(board, state, config.my_seat, config)
+    scores = {p: float(board.points[board.idx(p)]) for p in roster}
+    positions = {p: board.player(p).pos for p in roster}
+    total = best_lineup_points(scores, positions, config.roster)
+    print(f"\n  projected starting-lineup points: {total:.0f}")
+    print(f"  pick log: {log_path}")
+    print("\n  This is practice. The projections are a point estimate and the")
+    print("  season is mostly noise - do not read the total as a prediction.")
+
+
 # --- wiring ------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ffdraft", description=__doc__)
@@ -466,6 +617,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default="claude-opus-5")
     p.add_argument("--out", help="where to write the pick log")
     p.set_defaults(func=cmd_llm)
+
+    p = sub.add_parser("mock", help="practice draft against simulated opponents")
+    common(p)
+    p.add_argument("--seed", type=int, default=None,
+                   help="opponent-behaviour seed; omit for a different mock each run")
+    p.add_argument("--auto", action="store_true",
+                   help="let the engine pick for you too, and just show the roster")
+    p.add_argument("--out", help="where to write the mock pick log")
+    p.add_argument("--audit", help="where to write the audit log")
+    p.set_defaults(func=cmd_mock)
 
     p = sub.add_parser("replay", help="replay a draft log through the engine")
     common(p)

@@ -15,8 +15,25 @@ ffdraft draft  --league league2 --seat 5          # draft day
 
 Replace `5` with your actual draft slot. `--league cuomo` for League 1.
 
-Not installed as a command? Use `python -m ffdraft.cli` instead of `ffdraft`,
-or run `pip install -e .` in the repo root once.
+**`zsh: command not found: ffdraft`?** Install it once, in the repo root:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+```
+
+Then use `.venv/bin/ffdraft` everywhere. Don't rely on `source .venv/bin/activate`
+- on draft day you will open a fresh terminal, forget, and hit the same error
+mid-draft. Add an alias to `~/.zshrc` if you want the short name:
+
+```bash
+alias ffdraft="$HOME/path/to/ff_2026/.venv/bin/ffdraft"
+```
+
+Skipping the install entirely? Every command works as
+`PYTHONPATH=src python3 -m ffdraft.cli ...` from the repo root. (Plain
+`python3 -m ffdraft.cli` does *not* work - this repo uses a `src/` layout, so
+the package is not importable until it is installed or `src` is on the path.)
 
 ---
 
@@ -126,6 +143,55 @@ less able to separate close calls.
 **Enter opponent picks as they happen, not in batches.** The recommendation
 starts computing the moment the pick before yours is entered, so it's ready
 when the clock reaches you.
+
+---
+
+## 2b. Rehearse before Thursday
+
+Two different things, and you probably want the first.
+
+### Rehearsal against a real Sleeper mock — recommended
+
+Open a mock draft on Sleeper (or wherever), and run the console alongside it,
+typing in **every** pick as it happens. This is the real thing with fake
+stakes: same commands, same clock pressure, same typing.
+
+```bash
+ffdraft draft --league league2 --seat 5 --out logs/rehearsal_1.jsonl
+```
+
+`--out` is the only difference from draft day. It keeps the rehearsal out of
+`logs/draft_league2.jsonl`, which is the file you want clean for the real
+thing.
+
+Set `--seat` to whatever slot the mock gives you. If you don't know it until
+the draft starts, start the console once you do.
+
+What you are rehearsing:
+
+1. Typing opponent picks fast enough to keep up — this is the whole skill
+2. What an ambiguous name looks like, and how you resolve it (`josh QB`)
+3. Recovering from a missed pick without panicking (`undo`, `roster 7`)
+4. Reading the four-line card in the two seconds you will actually have
+
+Do it once. Twenty minutes. It is worth more than any amount of reading.
+
+### Solo practice with no draft room — `ffdraft mock`
+
+If you just want to see the engine build a roster, or practice the commands
+with nobody else involved, the opponent model can fill the other seats:
+
+```bash
+ffdraft mock --league league2 --seat 5              # you pick, it drafts the rest
+ffdraft mock --league league2 --seat 5 --auto       # it picks for you too, ~20s
+```
+
+At each of your picks: press **Enter** to take the engine's #1, or type a name
+to take someone else. `board RB`, `roster`, and `auto` also work.
+
+This does *not* rehearse the part that actually goes wrong on draft day, which
+is keeping up with entering other people's picks. Use it to sanity-check the
+engine, not to practise.
 
 ---
 
@@ -287,7 +353,8 @@ This is a draft tool.
 ffdraft check     --league <id> --seat <n>          # preflight
 ffdraft board     --league <id> [--pos RB] [--top 30]
 ffdraft baselines --league <id>                     # replacement-level arithmetic
-ffdraft draft     --league <id> --seat <n> [--sims 1000]
+ffdraft draft     --league <id> --seat <n> [--sims 1000] [--out <path>]
+ffdraft mock      --league <id> --seat <n> [--auto] [--seed N]
 ffdraft replay    --league <id> --log <path> [--check]
 ffdraft backtest  --league <id> --log <path> --actuals <path>
 ffdraft export-r  --league <id>                     # regenerate the R scoring block
