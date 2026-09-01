@@ -81,3 +81,40 @@ def test_warns_when_a_position_is_too_shallow_for_its_baseline(tmp_path, capsys)
 def test_a_missing_file_is_reported_not_traced(tmp_path):
     with pytest.raises(SystemExit, match="no projections at"):
         main(["sources", "--projections", str(tmp_path / "nope.csv")])
+
+
+def test_scale_check_flags_a_source_on_the_wrong_basis(tmp_path, capsys):
+    """A per-game source among per-season peers is invisible to coverage checks.
+
+    It shows full coverage at every position and contributes numbers ~17x too
+    small, which equal weighting quietly absorbs into every player it touches.
+    """
+    path = tmp_path / "proj.csv"
+    rows = [
+        f"{src},Player {i},RB,KC,7,1200,50,400\n"
+        for src in ("CBS", "ESPN", "FFToday")
+        for i in range(20)
+    ]
+    # Same players, but per-game numbers.
+    rows += [f"RTSports,Player {i},RB,KC,7,70,3,24\n" for i in range(20)]
+    _write(path, rows)
+
+    main(["sources", "--league", "cuomo", "--projections", str(path)])
+    out = capsys.readouterr().out
+    assert "OFF SCALE" in out
+    assert "RTSports projects on a different scale" in out
+
+
+def test_scale_check_is_quiet_when_sources_agree(tmp_path, capsys):
+    path = tmp_path / "proj.csv"
+    rows = [
+        f"{src},Player {i},RB,KC,7,{1200 + n * 40},50,400\n"
+        for n, src in enumerate(("CBS", "ESPN", "FFToday"))
+        for i in range(20)
+    ]
+    _write(path, rows)
+
+    main(["sources", "--league", "cuomo", "--projections", str(path)])
+    out = capsys.readouterr().out
+    assert "scale check" in out
+    assert "OFF SCALE" not in out

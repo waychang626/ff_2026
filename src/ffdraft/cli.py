@@ -804,7 +804,54 @@ def cmd_sources(args) -> int:
             mark = "ok " if len(players) >= need else "LOW"
             print(f"  {mark} {pos:<4}{len(players):>4} distinct players "
                   f"(replacement rank {need})")
+
+        _report_scale(rows, config, found)
     return 0
+
+
+def _report_scale(rows, config, found: list[str]) -> None:
+    """Median scored points per source, to catch one on a different scale.
+
+    This is the failure nothing else here would notice. A source publishing
+    per-game rather than per-season numbers, or half-PPR where its peers are
+    full, still shows perfect per-position coverage - it just contributes
+    numbers roughly 17x or 15% off, and the equal-weighted average silently
+    absorbs the error into every player it touches.
+    """
+    import statistics
+    from collections import defaultdict
+
+    from .scoring import score_stats
+
+    # Compare on one position with wide coverage, so the median is meaningful.
+    per_source_points: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        if row.pos in ("RB", "WR"):
+            per_source_points[row.source].append(score_stats(row.stats, config.scoring))
+
+    usable = {
+        src: statistics.median(values)
+        for src, values in per_source_points.items()
+        if len(values) >= 10
+    }
+    if len(usable) < 2:
+        return
+
+    overall = statistics.median(usable.values())
+    print(f"\n  scale check (median RB/WR points, cross-source median {overall:.0f}):")
+    suspect = []
+    for src in sorted(usable, key=lambda s: -usable[s]):
+        value = usable[src]
+        ratio = value / overall if overall else 1.0
+        flag = "" if 0.7 <= ratio <= 1.4 else "   <-- OFF SCALE"
+        if flag:
+            suspect.append(src)
+        print(f"    {src:<16}{value:>8.0f}  ({ratio:.2f}x){flag}")
+    if suspect:
+        print(f"  {', '.join(suspect)} projects on a different scale from its peers.")
+        print("  Likely per-game instead of per-season, or a different scoring")
+        print("  basis. Equal weighting will drag every player it covers toward")
+        print("  that scale - drop it from R/pull_projections.R and re-run.")
 
 
 # --- wiring ------------------------------------------------------------------
