@@ -184,6 +184,61 @@ class DraftState:
         updated[pick_number - 1] = player_id
         return DraftState(config=self.config, drafted=updated, my_seat=self.my_seat)
 
+    def insert(self, pick_number: int, player_id: str) -> "DraftState":
+        """Slot a missed pick in at `pick_number`, shifting the rest down one.
+
+        The failure this exists for is different from the one `replace` covers.
+        There, a pick went in as the wrong player and the count stayed right.
+        Here a pick never went in at all, so every pick after it is recorded
+        one slot early - and because the seat that owns a pick is derived from
+        its number, the whole tail is also attributed to the wrong teams. That
+        makes rosters wrong, which makes replacement level wrong, which makes
+        every recommendation after it wrong.
+
+        `replace` cannot repair this and neither can `undo` without discarding
+        the correct picks that followed. Inserting shifts the tail back into
+        alignment in one move.
+        """
+        if not (1 <= pick_number <= len(self.drafted) + 1):
+            raise DraftStateError(
+                f"pick {pick_number} is not a place to insert; the log holds "
+                f"{len(self.drafted)} pick(s), so 1..{len(self.drafted) + 1} are "
+                f"the slots"
+            )
+        clash = next(
+            (n for n, pid in enumerate(self.drafted, start=1) if pid == player_id),
+            None,
+        )
+        if clash is not None:
+            raise DraftStateError(
+                f"{player_id} is already recorded at pick {clash}. Inserting him "
+                f"again would put him on two rosters."
+            )
+        if len(self.drafted) + 1 > self.config.total_drafted:
+            raise DraftStateError(
+                f"the log is already {len(self.drafted)} picks long and the draft "
+                f"is only {self.config.total_drafted}; inserting would push a pick "
+                f"off the end. Undo the extra pick first."
+            )
+        updated = list(self.drafted)
+        updated.insert(pick_number - 1, player_id)
+        return DraftState(config=self.config, drafted=updated, my_seat=self.my_seat)
+
+    def remove(self, pick_number: int) -> "DraftState":
+        """Take out a pick that never happened, shifting the rest up one.
+
+        The mirror of `insert`, for the double-entered pick. `undo` only
+        reaches the end of the log.
+        """
+        if not (1 <= pick_number <= len(self.drafted)):
+            raise DraftStateError(
+                f"pick {pick_number} is not in the log; "
+                f"{len(self.drafted)} pick(s) recorded so far"
+            )
+        updated = list(self.drafted)
+        updated.pop(pick_number - 1)
+        return DraftState(config=self.config, drafted=updated, my_seat=self.my_seat)
+
     def undo(self) -> "DraftState":
         if not self.drafted:
             raise DraftStateError("nothing to undo")

@@ -165,6 +165,8 @@ don't have to ask for it.
 | `undo` | Take back the last pick |
 | `log` / `log 20` | Recent picks **with their numbers** |
 | `fix 40 josh allen` | Correct pick 40, leaving every other pick alone |
+| `insert 40 josh allen` | Add a pick you missed at 40; everything after shifts down |
+| `drop 40` | Remove a pick that never happened; everything after shifts up |
 | `roster` / `roster 3` | Show your roster / seat 3's roster |
 | `board` / `board RB` | Best available overall / at a position |
 | `out <name> : <reason>` | Rule a player out for the season |
@@ -193,10 +195,24 @@ It refuses to create a duplicate, refuses a pick number that isn't in the log,
 and records what it changed in the pick log. Everything downstream —
 replacement level, survival, your roster — recomputes from the corrected state.
 
-If a player was entered who was never actually drafted, `fix` him to whoever
-really went there. There is no "delete a pick" — the pick happened, someone got
-picked, and a log with a hole in it would put every later pick on the wrong
-seat.
+### A pick you missed entirely
+
+`fix` swaps a player at a pick that exists. If a pick never got entered at all,
+the count itself is wrong: every later pick sits one slot early, and since the
+seat that owns a pick comes from its number, the whole tail is on the wrong
+team. That is what `insert` is for.
+
+```
+log                      # find where the gap is
+insert 40 josh allen     # everything from 40 on shifts down one
+```
+
+`drop 40` is the mirror, for a pick that got entered twice. Both rewrite the
+pick numbers and seats in the saved log, and both refuse a change that would
+duplicate a player or push a pick past the end of the draft.
+
+The symptom that sends you here is usually `! pick count mismatch`, or a
+`roster <seat>` that has someone else's player in it.
 
 ### Numbers work on your own pick too
 

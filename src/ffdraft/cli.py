@@ -189,6 +189,50 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def _run_stamp() -> str:
+    """A sortable per-run stamp for log filenames."""
+    from datetime import datetime
+
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _unique(path: Path) -> Path:
+    """The first free filename at or after `path`.
+
+    A timestamp alone is not enough: two mocks started inside the same second
+    produce the same name, and the second silently overwrites the first - which
+    is the bug this was meant to fix, just narrower.
+    """
+    if not path.exists():
+        return path
+    for n in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{n}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise SystemExit(f"cannot find a free filename near {path}")
+
+
+def _preserve(path: Path) -> Path | None:
+    """Move an existing non-empty log aside instead of truncating it.
+
+    Reopening the console on the same league pointed at the same default path,
+    which silently replaced the log of a draft that had already happened. A
+    pick log is the only record of the room and cannot be reconstructed
+    afterwards, so the cost of losing one is not symmetric with the cost of an
+    extra file.
+    """
+    # Not a byte count: `DraftLog.save` always writes a header line, so a log
+    # from a console that was opened and closed again is small but never zero.
+    # Backing that up would leave a trail of files holding nothing.
+    if not path.exists():
+        return None
+    if len([l for l in path.read_text().splitlines() if l.strip()]) <= 1:
+        return None
+    backup = _unique(path.with_name(f"{path.stem}.{_run_stamp()}{path.suffix}"))
+    path.rename(backup)
+    return backup
+
+
 # --- the live console --------------------------------------------------------
 HELP = """
   <number>          take that numbered player - the engine's 1/2/3 on your
@@ -199,6 +243,8 @@ HELP = """
   undo              take back the last pick
   log [n]           show the last n picks with their numbers
   fix <n> <name>    correct pick n (use when a name resolved to the wrong guy)
+  insert <n> <name> add a pick you missed at n; everything after shifts down
+  drop <n>          remove a pick that never happened; the rest shift up
   roster [seat]     show a roster
   board [pos]       show the best available
   out <name> : <r>  rule a player out for the season, with a reason
@@ -216,6 +262,7 @@ def cmd_draft(args) -> int:
     log = DraftLog(league_id=config.league_id, my_seat=config.my_seat)
     audit = AuditLog(args.audit) if args.audit else AuditLog()
     log_path = Path(args.out or f"logs/draft_{config.league_id}.jsonl")
+    moved = _preserve(log_path)
     state = DraftState(config=config, drafted=[], my_seat=config.my_seat)
 
     from .opponents import DraftSimulator
@@ -239,6 +286,8 @@ def cmd_draft(args) -> int:
               f"draft order is VOR rank.\n"
               f"           Survival % and the numbered list are approximate. "
               f"Run `ffdraft check` for the fix.")
+    if moved:
+        print(f"  kept the previous log as {moved}")
     print(f"pick log -> {log_path}")
     print(HELP)
 
@@ -347,6 +396,12 @@ def _shared_command(line, state, board, config, log, log_path, audit,
         return state, board, True, False
     if _word(lower, "fix"):
         state = _fix_pick(line, state, board, log, log_path)
+        return state, board, True, True
+    if _word(lower, "insert"):
+        state = _insert_pick(line, state, board, config, log, log_path)
+        return state, board, True, True
+    if _word(lower, "drop"):
+        state = _drop_pick(line, state, board, config, log, log_path)
         return state, board, True, True
     if _word(lower, "roster"):
         parts = line.split()
@@ -526,8 +581,12 @@ def _show_suggestions(simulator, board, config, state, n) -> list[int]:
           f"(type the number; {covered:.0%} of the time it is one of these)")
     for k, (idx, prob) in enumerate(rows, start=1):
         player = board.players[idx]
+        # A player who won none of 4,000 draws is not impossible, he is just
+        # under the resolution of the simulation. Printing 0% next to a name
+        # the console is actively offering reads as a bug.
+        shown = f"{prob:.0%}" if prob >= 0.005 else "<1%"
         print(f"   {k:>2}  {player.name[:24]:<25}{player.pos:<4}{player.team:<4}"
-              f"{prob:>6.0%}")
+              f"{shown:>6}")
     return [idx for idx, _ in rows]
 
 
@@ -580,6 +639,94 @@ def _fix_pick(line, state, board, log, log_path):
     log.save(log_path)
     print(f"  pick {number}: {board.player(was).display} -> "
           f"{resolution.best.display}")
+    return state
+
+
+def _renumber(log, state, config) -> None:
+    """Rewrite pick numbers and seats after an insert or a drop.
+
+    The seat that owns a pick is derived from its number, so shifting the log
+    re-attributes every pick after the shift. Recomputing the whole tail is
+    cheaper to reason about than patching the entries individually, and it
+    cannot drift out of step with `pick_owner`.
+    """
+    for n, pid in enumerate(state.drafted, start=1):
+        if n - 1 < len(log.picks):
+            entry = log.picks[n - 1]
+            entry.pick = n
+            entry.player_id = pid
+            entry.seat = pick_owner(n, config.teams, config.draft_type)
+
+
+def _insert_pick(line, state, board, config, log, log_path):
+    """`insert <pick number> <name>` - a pick that was missed at the time.
+
+    Everything from that number on shifts down one, which is the whole point:
+    a missed pick leaves the entire tail of the log attributed to the wrong
+    seats, and no amount of `fix` repairs that.
+    """
+    parts = line.split(None, 2)
+    if len(parts) < 3:
+        print("  ! usage: insert <pick number> <name>   (try `log` to find the number)")
+        return state
+    try:
+        number = int(parts[1])
+    except ValueError:
+        print(f"  ! {parts[1]!r} is not a pick number. Try `log` to find it.")
+        return state
+
+    resolution = board.resolver.resolve(parts[2])
+    if not resolution.found:
+        print(f"  ! {resolution.note}")
+        return state
+    if resolution.ambiguous:
+        print(f"  ! {resolution.note}")
+        print("    say which one - add the position (e.g. 'josh QB') "
+              "or type the full name")
+        return state
+
+    try:
+        state = state.insert(number, resolution.best.player_id)
+    except DraftStateError as exc:
+        print(f"  ! {exc}")
+        return state
+
+    log.append(state.drafted[-1], seat=0)
+    _renumber(log, state, config)
+    log.picks[number - 1].note = "inserted; later picks shifted down"
+    log.save(log_path)
+    seat = pick_owner(number, config.teams, config.draft_type)
+    print(f"  inserted at pick {number} (seat {seat}): {resolution.best.display}")
+    print(f"  {len(state.drafted) - number} later pick(s) shifted down one; "
+          f"pick {state.pick_number} is now on the clock")
+    return state
+
+
+def _drop_pick(line, state, board, config, log, log_path):
+    """`drop <pick number>` - a pick that never happened. The mirror of insert."""
+    parts = line.split()
+    if len(parts) < 2:
+        print("  ! usage: drop <pick number>   (try `log` to find the number)")
+        return state
+    try:
+        number = int(parts[1])
+    except ValueError:
+        print(f"  ! {parts[1]!r} is not a pick number. Try `log` to find it.")
+        return state
+
+    was = state.drafted[number - 1] if 1 <= number <= len(state.drafted) else None
+    try:
+        state = state.remove(number)
+    except DraftStateError as exc:
+        print(f"  ! {exc}")
+        return state
+
+    log.picks.pop()
+    _renumber(log, state, config)
+    log.save(log_path)
+    print(f"  removed pick {number}: {board.player(was).display}")
+    print(f"  later pick(s) shifted up one; pick {state.pick_number} is now "
+          f"on the clock")
     return state
 
 
@@ -692,6 +839,8 @@ MOCK_HELP = """
   undo              take back the last pick
   log [n]           show the last n picks with their numbers
   fix <n> <name>    correct pick n (use when a name resolved to the wrong guy)
+  insert <n> <name> add a pick you missed at n; everything after shifts down
+  drop <n>          remove a pick that never happened; the rest shift up
   roster [seat]     show a roster - yours, or any opponent's
   board [pos]       show the best available
   out <name> : <r>  rule a player out for the season, with a reason
@@ -728,7 +877,14 @@ def cmd_mock(args) -> int:
 
     audit = AuditLog(args.audit) if args.audit else AuditLog()
     log = DraftLog(league_id=config.league_id, my_seat=seat)
-    log_path = Path(args.out or f"logs/mock_{config.league_id}.jsonl")
+    # One file per run. A mock is something you do repeatedly to practise, so
+    # a fixed name meant every rehearsal overwrote the last one and there was
+    # nothing to compare against.
+    log_path = (
+        Path(args.out) if args.out
+        else _unique(Path(f"logs/mock_{config.league_id}_{_run_stamp()}.jsonl"))
+    )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     state = DraftState(config=config, drafted=[], my_seat=seat)
     auto = args.auto
 

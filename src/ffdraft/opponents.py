@@ -266,6 +266,16 @@ class DraftSimulator:
         per simulation, not a rollout - it is a single vectorised argmin and
         costs milliseconds.
 
+        The list is always `n` long while `n` players remain legal, which is
+        not the same as listing only the players who won a simulation. When one
+        faller's ADP sits far enough ahead of the rest, he wins every draw and
+        `np.unique` returns exactly one row - so the shortlist that exists to
+        save you typing collapses to a single name in precisely the rounds
+        where the board is widest. Below the simulated winners the list falls
+        back to ADP order, which is the right tiebreak: those are the players
+        the model would reach for next, they just never came first in 4,000
+        draws.
+
         Returns (board index, probability) pairs, longest odds last.
         """
         cfg = self.config
@@ -312,8 +322,20 @@ class DraftSimulator:
         perceived = np.where(playable[None, :], perceived, np.inf)
         winners = np.argmin(perceived, axis=1)
         idxs, hits = np.unique(winners, return_counts=True)
-        order = np.argsort(-hits, kind="stable")[:n]
-        return [(int(idxs[i]), float(hits[i]) / n_sims) for i in order]
+
+        probability = np.zeros(self.n_players, dtype=float)
+        probability[idxs] = hits / n_sims
+
+        # Rank by simulated probability, then by ADP. Anyone unplayable sorts
+        # to the back and is dropped, so the list never offers a player this
+        # seat cannot legally take.
+        rank_p = np.where(playable, probability, -1.0)
+        rank_adp = np.where(playable, self.board.adp, np.inf)
+        order = np.lexsort((rank_adp, -rank_p))
+        return [
+            (int(i), float(probability[i]))
+            for i in order[: min(n, int(playable.sum()))]
+        ]
 
     def next_selection(
         self,

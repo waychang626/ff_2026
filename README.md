@@ -104,6 +104,8 @@ These are identical in `ffdraft draft` and `ffdraft mock`.
 | Get the recommendation again | `go` (also `rec` or `.`) |
 | Take back the last pick | `undo` |
 | Fix a pick you got wrong four picks ago | `log` to find the number, then `fix 40 josh allen` |
+| **Add a pick you missed entirely** | `insert 40 josh allen` — everything after shifts down |
+| Remove a pick that never happened | `drop 40` — everything after shifts up |
 | Tell the engine someone is out for the year | `out james cook : ACL, ruled out` |
 | Tell it someone is dinged but playing | `bump james cook 0.75 : limited all week` |
 | Write the pick log right now | `save` |
@@ -507,7 +509,7 @@ Built and tested in a container with no R and no outbound access to the
 projection sources, so:
 
 **Verified** — the whole Python engine, end to end, against a synthetic board:
-234 tests, determinism, greedy-vs-brute-force lineups, the calibration
+263 tests, determinism, greedy-vs-brute-force lineups, the calibration
 arithmetic, the opponent model's herding, the endogenous variance appetite, both
 league configs, the replay harness and the backtester.
 
@@ -526,7 +528,7 @@ result.
 ## Testing
 
 ```bash
-python -m pytest              # 234 tests, ~95s
+python -m pytest              # 263 tests, ~95s
 python -m pytest tests/test_variance_appetite.py -v   # the §3.1 behaviour
 ```
 
@@ -641,6 +643,38 @@ seat still needs, and whether a run is on.
 that pick 40 went in as the wrong Josh. `fix` swaps one recorded pick and
 refuses anything that would corrupt the log.
 
+### Fix: the shortlist collapsed in the rounds it was needed most
+Reported from a live practice draft: by round 10 the likely-pick list was
+showing one or two names instead of ten. `likely_next_picks` built its list from
+`np.unique(argmin)`, which only returns players who *won* a simulation. When one
+faller's ADP sits far enough ahead of everyone left he wins all 4,000 draws, so
+`unique` returns a single row — and the list that exists to save you typing
+disappeared exactly where the board is widest and you least remember who is
+left. Now ranked by simulated probability and backfilled in ADP order, so it is
+always as long as asked for while that many players remain legal. A name the
+console is actively offering also no longer prints as `0%`, which read as a
+broken list; below the simulation's resolution it says `<1%`.
+
+### `insert` and `drop`: repair a log that lost its place
+`fix` handles the wrong player at the right pick. A pick you never entered is a
+different failure: every later pick is recorded one slot early, and because the
+seat that owns a pick is derived from its number, the whole tail is attributed
+to the wrong teams — wrong rosters, wrong replacement level, wrong
+recommendations. `undo` can only reach that by discarding the correct picks
+after it. `insert 40 josh allen` slots the missing pick in and shifts the tail
+back into alignment; `drop 40` is the mirror, for a pick entered twice. Both
+renumber the saved log and refuse anything that would duplicate a player or push
+a pick past the end of the draft.
+
+### Fix: every mock draft overwrote the last one's log
+`mock` wrote to `logs/mock_<league>.jsonl` on every run, so a rehearsal you
+wanted to compare against was already gone. Each run now gets its own
+timestamped file — with a counter, because two mocks started inside the same
+second collided and the test caught it. The live console keeps its stable
+filename, since that is where the runbook says to look, but no longer truncates
+an existing log: a pick log is the only record of the room and cannot be rebuilt
+afterwards, so a previous one is moved aside and the console says where it went.
+
 ### `ffdraft trades`: what to offer, to whom, and why they would accept
 A trade creates value out of positional imbalance, not out of one side being
 fooled: your RB4 scores you nothing on Sunday, and the WR-heavy owner has the
@@ -692,4 +726,4 @@ with the brief's open-item verification.
 ### Initial build
 The engine end to end in the brief's build order: replay harness first, then
 projections, calibration, VOR, opponent model, Monte Carlo, `recommend_pick`,
-and the LLM layer last. 234 tests.
+and the LLM layer last. 263 tests.
