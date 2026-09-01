@@ -60,10 +60,13 @@ def test_diff_names_only_what_actually_differs(capsys):
     assert "skill-position scoring is IDENTICAL" in out
     assert "one projection set serves both leagues" in out
 
-    # No skill-position line should be marked as differing.
+    # The invariant that matters: no rule driving a skill-position projection
+    # may differ, because one projection set serves both leagues.
+    skill_rules = ("passing yards", "passing TD", "rushing yards", "rushing TD",
+                   "reception", "receiving yards", "receiving TD", "fumble lost")
     for line in out.splitlines():
         if "DIFFERS" in line:
-            assert any(k in line for k in ("FG", "extra point", "forced fumble")), line
+            assert not any(r in line for r in skill_rules), line
 
 
 def test_replacement_levels_are_shown_with_the_other_league(capsys):

@@ -27,12 +27,14 @@ KNOWN_STATS: frozenset[str] = frozenset(
         "rec", "rec_yds", "rec_tds", "rec_tgt", "rec_100_yds",
         # misc offense
         "fumbles_lost", "fumbles_total", "two_pts", "return_tds", "return_yds",
+        "off_fumble_return_td",
         # kicking
         "xp", "xp_att", "xp_miss", "fg", "fg_att", "fg_miss",
         "fg_0019", "fg_2029", "fg_3039", "fg_4049", "fg_50", "fg_60",
         # team defense
         "dst_int", "dst_fum_rec", "dst_forced_fumble", "dst_sacks", "dst_safety",
         "dst_td", "dst_blk", "dst_ret_yds", "dst_pts_allowed", "dst_yds_allowed",
+        "dst_fourth_down_stop", "dst_xp_return",
     }
 )
 
@@ -98,7 +100,7 @@ _R_SECTIONS = {
     "pass": ("pass_yds", "pass_tds", "pass_int", "pass_comp", "pass_att", "pass_300_yds"),
     "rush": ("rush_yds", "rush_tds", "rush_att", "rush_100_yds"),
     "rec": ("rec", "rec_yds", "rec_tds", "rec_tgt", "rec_100_yds"),
-    "misc": ("fumbles_lost", "two_pts"),
+    "misc": ("fumbles_lost", "two_pts", "off_fumble_return_td"),
     "ret": ("return_tds", "return_yds"),
     "kick": (
         "xp", "xp_miss", "fg_0019", "fg_2029", "fg_3039", "fg_4049",
@@ -106,7 +108,7 @@ _R_SECTIONS = {
     ),
     "dst": (
         "dst_int", "dst_fum_rec", "dst_forced_fumble", "dst_sacks",
-        "dst_safety", "dst_td", "dst_blk",
+        "dst_safety", "dst_td", "dst_blk", "dst_fourth_down_stop", "dst_xp_return",
     ),
 }
 

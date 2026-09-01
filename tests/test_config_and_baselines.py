@@ -174,7 +174,14 @@ def test_skill_position_scoring_is_identical_across_leagues(cuomo_config):
     from ffdraft.config import load_by_id
 
     league2 = load_by_id("league2")
-    assert cuomo_config.scoring.offense == league2.scoring.offense
+    # Compare only the rules a projection source actually provides. Both
+    # leagues also score things nothing projects (offensive fumble return TDs,
+    # 4th down stops), which score 0 for everyone and cannot move a ranking -
+    # and League 2's settings page has not been checked for those.
+    unprojected = {"off_fumble_return_td"}
+    mine = {k: v for k, v in cuomo_config.scoring.offense.items() if k not in unprojected}
+    theirs = {k: v for k, v in league2.scoring.offense.items() if k not in unprojected}
+    assert mine == theirs
     assert cuomo_config.scoring.pts_bracket == league2.scoring.pts_bracket
     # All the differences live in K and DST.
     assert cuomo_config.scoring.kicking != league2.scoring.kicking

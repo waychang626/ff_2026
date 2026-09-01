@@ -129,6 +129,147 @@ league.yaml ─► baselines (§3.2) ─► VOR + tiers ────────
 
 ---
 
+## How the pick is actually chosen
+
+The LLM never sees any of this. One function does the whole thing, the same way
+every time.
+
+### Before the draft: build the board once
+
+```
+raw stat lines (5 sources)
+  │  equal weight — source accuracy does not persist year to year
+  ▼
+mean stat line per player
+  │  apply the league's scoring rules
+  ▼
+projected points
+  │  §3.3 corrections, as one transform:
+  │    · shrink toward the positional mean   (QB ×0.67 … WR ×0.85)
+  │    · subtract optimism                   (−21.6, QB −46.5)
+  │    · derive an outcome sd from R² = 0.20
+  ▼
+each player: a mean AND a spread          ← the spread is the important half
+  │  join ADP; impute from VOR rank where missing
+  ▼
+Board (frozen; changes only via a logged projection update)
+```
+
+The board is built once and held fixed. That is what makes a replay meaningful:
+if the board could drift between calls, identical picks need not produce
+identical recommendations.
+
+### On every pick: six steps
+
+**1. Validate, then seed.**
+The pick log, your roster and the pick number are cross-checked against each
+other; a disagreement stops the engine rather than producing a plausible wrong
+answer. Then
+
+```
+state_hash = sha256(league config, board, picks so far, seat, pick number)
+seed       = config.sim.seed XOR state_hash
+```
+
+Same state, same seed, same answer — always.
+
+**2. Shortlist ~12 candidates.**
+Simulating all 250 remaining players is pointless; most cannot be the answer.
+Candidates are ranked by an equal blend of
+
+- **VOR** — points above the replacement-level player at that position, *given
+  the live board*. As players come off, replacement slides down with them.
+- **marginal** — how much the player improves your best legal starting lineup.
+  This is where "position need" comes from: a third QB in a two-QB league
+  improves nothing, so it scores zero. Nobody had to pass a flag.
+
+Neither alone is enough — VOR alone over-drafts positions you have filled,
+marginal alone chases whatever slot happens to be empty.
+
+**3. Apply the one hard policy guard.**
+No kicker or defense before its configured round, and never more than the
+lineup starts. This is §3.5 — the roster slot that separates the builds that
+beat 50% from the ones that do not. It releases automatically when your
+remaining picks equal the mandatory slots you still have to fill, so the roster
+is always legal at the end. Nothing else is constrained; capping RB or WR would
+be choosing your build for you, which §3.6 forbids.
+
+**4. Simulate the rest of the draft, once per candidate.**
+Each simulated team gets a *persistent* private ranking of the board — ADP plus
+one draw of noise, fixed for the whole draft. Teams have consistent
+preferences; re-randomising every pick would model a league of amnesiacs and
+would wash out exactly the runs we want to catch. Each team then takes the best
+player left that its roster can still use.
+
+Two behaviours are layered on, both from §3.4:
+
+- **Herding.** When the previous pick was a QB (early) or a K/DST (any time),
+  that position gets pulled up the board. Implemented as a rank bonus, because
+  multiplying a position's odds by *m* under an ADP-plus-noise ranking is the
+  same as moving it `log(m) × sd` picks earlier — about 7 picks here, which is
+  what a run actually looks like.
+- **Handcuffing: absent on purpose.** 793 teams with a handcuff pair won
+  51.04% against 50.56% without — a Bayes factor of 4.2 *favouring no
+  difference*. A test walks the syntax tree to keep it out.
+
+**5. Simulate the season, once per candidate.**
+For every simulated draft, every player draws a season outcome from a lognormal
+matched to his mean and spread — right-skewed, because fantasy outcomes are and
+because with half the field making the playoffs the ceiling is worth more than
+a symmetric distribution would price it. That total is spread across the weeks
+he is active (byes removed), with weekly noise on top and a chance of a
+season-ending injury at a random week.
+
+Then every team's best legal lineup is filled each week — greedy from the most
+restrictive slot outward, which is *provably* optimal here because the slots
+nest (QB ⊂ Q/W/R/T, WR ⊂ W/R/T ⊂ Q/W/R/T), and a test checks it against brute
+force. Weekly scores go head-to-head on a fixed round-robin schedule, standings
+seed a single-elimination bracket, and the bracket produces a champion.
+
+Out of one pass: **P(weekly win)**, **P(playoffs)**, **P(title)**.
+
+This is also where risk appetite comes from, and why there is no setting for it.
+Maximising P(title) buys variance when your roster is behind the field and
+sheds it when you are ahead — not because anyone coded that, but because that
+is what maximises P(title). Measured in both directions in
+`tests/test_variance_appetite.py`.
+
+**Common random numbers.** Opponent preferences and player outcomes are drawn
+*once* and reused for every candidate, so the candidates are compared in the
+same simulated seasons. Without this the differences between them would be
+mostly luck.
+
+**6. Rank — and refuse to invent precision.**
+P(title) is the objective, but it is estimated from a binary outcome and the
+gap between the top few candidates is routinely smaller than its standard
+error. Sorting on it anyway would give a ranking that reshuffles on a different
+seed: decisive-looking, and arbitrary.
+
+So candidates the simulation *cannot separate* from the leader — within two
+paired standard errors — are collected into a tie group and ordered instead by
+**cost of waiting**:
+
+```
+(1 − P(he survives to your next pick)) × (his VOR − the VOR you expect
+                                           to still be there at his position)
+```
+
+Among options that win the title equally often, take the one you are most
+likely to lose. That is the dynamic program's own logic, applied exactly where
+the Monte Carlo runs out of resolution. The card says `title odds tied` when
+this happened, which is your signal that your own judgment is cheap to apply.
+
+**Survival is measured honestly.** A candidate's survival has to come from a
+world where you did *not* take him — in his own rollout he is gone by
+construction. So each candidate is measured in the leader's rollout, and the
+leader in the runner-up's.
+
+### What comes back
+
+The top three with VOR, survival, P(title), and the paired standard error of
+each delta — plus the four-line card. Every call appends
+`(state_hash, output, timestamp)` to `logs/audit.jsonl`.
+
 ## Determinism
 
 The simulation seed is derived from a hash of the league config, the board, the
@@ -265,6 +406,18 @@ See `docs/research-map.md` for where each research finding lives in the code.
 ## Changelog
 
 Newest first. Every push updates this section.
+
+### Correct League 1's scoring against the settings page
+Checked line by line against Yahoo. Ten of thirteen offensive rules already
+matched. Added **missed PAT at −2**, which is real, expressible, and was simply
+missing. Encoded three more the league scores but no projection source
+publishes — offensive fumble return TD, 4th down stops, extra point returned —
+so the config mirrors the settings page and `ffdraft rules` flags them as known
+blind spots rather than leaving them to look like oversights. Together they are
+worth ~5–8 points a season at positions the engine punts anyway.
+
+Also expanded the README with a full walkthrough of how `recommend_pick`
+decides.
 
 ### Correct League 1's roster; add `ffdraft rules`
 The brief described League 1 as having **no TE slot and two W/R/T flexes**. The

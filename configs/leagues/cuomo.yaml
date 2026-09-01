@@ -52,7 +52,10 @@ scoring:
     rec_tds: 6
     fumbles_lost: -2     # overrides the ffanalytics default of -3
     two_pts: 2
-    return_tds: 6
+    return_tds: 6        # kickoff and punt return TDs, offense and DST
+    # NO SOURCE PROVIDES THIS: nothing projects offensive fumble return TDs.
+    # Encoded so the config mirrors the settings page; it scores as 0.
+    off_fumble_return_td: 6
   kicking:
     xp: 1
     fg_0019: 3
@@ -60,9 +63,12 @@ scoring:
     fg_3039: 3
     fg_4049: 4
     fg_50: 5
-    # KNOWN COMPROMISE: this league only penalises missed FGs under 20 yds and
-    # missed PATs (-2 each). A single fg_miss field cannot express "under 20
-    # yds only", so it is set to 0 rather than over-penalising every miss.
+    # Missed PATs are -2 and that IS expressible, so it is encoded.
+    xp_miss: -2
+    # KNOWN COMPROMISE: missed FGs are only penalised under 20 yards (-2). A
+    # single fg_miss field cannot express "under 20 yds only", so it is set to
+    # 0 rather than penalising every miss. Kickers are very slightly
+    # over-valued as a result - immaterial at a punted position.
     fg_miss: 0
   dst:
     dst_int: 2
@@ -71,8 +77,12 @@ scoring:
     dst_sacks: 1
     dst_td: 6
     dst_blk: 2
-    # KNOWN COMPROMISE: no forced-fumble field exists upstream. League 1 does
-    # not pay for it anyway, so nothing is lost here (League 2 does - see note).
+    # NO SOURCE PROVIDES THESE: encoded so the config mirrors the settings
+    # page, but nothing projects them and both score as 0. Together they are
+    # worth roughly 5-8 points to a good defense across a season, at a
+    # position the engine punts until round 14 anyway.
+    dst_fourth_down_stop: 0.5
+    dst_xp_return: 2
   pts_bracket:
     - {threshold: 0,  points: 10}
     - {threshold: 6,  points: 7}

@@ -890,7 +890,8 @@ _STAT_LABELS = {
     "rec": "reception", "rec_yds": "receiving yards", "rec_tds": "receiving TD",
     "rec_tgt": "target",
     "fumbles_lost": "fumble lost", "two_pts": "2-pt conversion",
-    "return_tds": "return TD", "return_yds": "return yards",
+    "return_tds": "kick/punt return TD", "return_yds": "return yards",
+    "off_fumble_return_td": "off. fumble return TD",
     "xp": "extra point", "xp_miss": "missed extra point",
     "fg_0019": "FG 0-19", "fg_2029": "FG 20-29", "fg_3039": "FG 30-39",
     "fg_4049": "FG 40-49", "fg_50": "FG 50+", "fg_60": "FG 60+",
@@ -898,6 +899,7 @@ _STAT_LABELS = {
     "dst_int": "interception", "dst_fum_rec": "fumble recovery",
     "dst_sacks": "sack", "dst_safety": "safety", "dst_td": "defensive TD",
     "dst_blk": "blocked kick", "dst_forced_fumble": "forced fumble",
+    "dst_fourth_down_stop": "4th down stop", "dst_xp_return": "extra point returned",
 }
 
 def _compromise(key: str, value: float) -> str | None:
@@ -913,7 +915,14 @@ def _compromise(key: str, value: float) -> str | None:
             "set to 0 because a single value cannot express 'only penalise "
             "misses under 20 yards'. Kickers are slightly over-valued."
         )
-    if key == "dst_forced_fumble" and value:
+    # Rules that are real but that no projection source publishes. Encoded so
+    # the config mirrors the settings page, and flagged so it is obvious the
+    # engine is blind to them rather than that someone forgot.
+    unprojected = {
+        "dst_forced_fumble", "dst_fourth_down_stop", "dst_xp_return",
+        "off_fumble_return_td",
+    }
+    if key in unprojected and value:
         return "no projection source provides this stat, so it scores as 0"
     return None
 
@@ -953,11 +962,13 @@ def cmd_rules(args) -> int:
         ("PASSING", ["pass_yds", "pass_tds", "pass_int", "pass_comp", "pass_att"]),
         ("RUSHING", ["rush_yds", "rush_tds", "rush_att"]),
         ("RECEIVING", ["rec", "rec_yds", "rec_tds", "rec_tgt"]),
-        ("MISC", ["fumbles_lost", "two_pts", "return_tds", "return_yds"]),
+        ("MISC", ["fumbles_lost", "two_pts", "return_tds", "return_yds",
+                   "off_fumble_return_td"]),
         ("KICKING", ["xp", "xp_miss", "fg_0019", "fg_2029", "fg_3039",
                       "fg_4049", "fg_50", "fg_60", "fg_miss"]),
         ("TEAM DEFENSE", ["dst_int", "dst_fum_rec", "dst_sacks", "dst_safety",
-                           "dst_td", "dst_blk", "dst_forced_fumble"]),
+                           "dst_td", "dst_blk", "dst_forced_fumble",
+                           "dst_fourth_down_stop", "dst_xp_return"]),
     ]
     values = config.scoring.multipliers
     other_values = other.scoring.multipliers if other else {}
@@ -1008,11 +1019,24 @@ def cmd_rules(args) -> int:
     print("    run `ffdraft baselines` for how these are derived")
 
     if other is not None:
-        same = config.scoring.offense == other.scoring.offense
+        # Compare only rules a projection source actually provides. A league
+        # can score offensive fumble return TDs all it likes; nothing projects
+        # them, they are worth 0 to every player, and letting them read as a
+        # scoring difference would obscure the claim that matters - that one
+        # projection set serves both leagues.
+        unprojected = {"off_fumble_return_td"}
+        mine = {k: v for k, v in config.scoring.offense.items() if k not in unprojected}
+        theirs = {k: v for k, v in other.scoring.offense.items() if k not in unprojected}
+        same = mine == theirs
         print(f"\n  vs {other.name}: skill-position scoring is "
               f"{'IDENTICAL' if same else 'DIFFERENT'}")
         if same:
             print("    one projection set serves both leagues")
+            ignored = sorted(
+                (set(config.scoring.offense) | set(other.scoring.offense)) & unprojected
+            )
+            if ignored:
+                print(f"    (ignoring {', '.join(ignored)} - no source projects it)")
 
     if config.notes:
         print("\n  NOTES")
