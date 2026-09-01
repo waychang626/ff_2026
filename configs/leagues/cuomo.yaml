@@ -1,9 +1,14 @@
 # League 1 - "The Andrew M. Cuomo League" (Yahoo, league ID 50271)
 #
-# Two structural facts drive everything here (brief section 4):
-#   1. No TE slot. A tight end only plays by beating a flex-eligible RB/WR.
-#   2. Q/W/R/T is a superflex. With 4-pt passing TDs a second QB beats a
-#      flex-level WR, so assume all 8 teams start two QBs.
+# CORRECTED against the live Yahoo settings page. The project brief described
+# this league as having NO TE slot and TWO W/R/T flexes. Both were wrong: there
+# is a dedicated TE slot and only one W/R/T. That changes the RB and WR
+# baselines by three and four ranks respectively, and it removes the reason the
+# brief gave for treating tight end as a position you skip.
+#
+# The one structural fact that survives:
+#   Q/W/R/T is a superflex. With 4-pt passing TDs a second QB beats a
+#   flex-level WR, so assume all 8 teams start two QBs.
 # Eight teams also means replacement level is extremely high: only 136 players
 # are drafted, so VOR gaps compress at every position and the board tilts
 # toward raw talent and bust-avoidance over positional gymnastics.
@@ -20,7 +25,7 @@ draft:
   my_seat: null          # 1-indexed. Set this before the draft.
 
 roster:
-  starters: [QB, WR, WR, WR, RB, RB, WRT, WRT, QWRT, K, DEF]
+  starters: [QB, WR, WR, WR, RB, RB, TE, WRT, QWRT, K, DEF]
   bench: 6
   ir: 2                  # IR slots are not drafted into.
 
@@ -78,24 +83,27 @@ scoring:
     - {threshold: 99, points: -4}
 
 baselines:
-  # Demand math (brief section 4): 11 starters x 8 teams = 88 slots.
-  # Fixed: 8 QB, 16 RB, 24 WR, 8 K, 8 DEF. Flex adds 24 more.
-  # These are the brief's stated numbers and are what the engine uses.
-  # `ffdraft baselines --explain cuomo` shows how each one is derived and
-  # where the derivation disagrees.
+  # Demand math: 11 starters x 8 teams = 88 slots.
+  # Fixed: 8 QB, 16 RB, 24 WR, 8 TE, 8 K, 8 DEF = 72. Two flexes add 16.
+  # Every one of these now falls straight out of the arithmetic - run
+  # `ffdraft baselines --league cuomo` to see it.
+  #
+  # The brief's table said RB 23 / WR 33. Those came from assuming two W/R/T
+  # flexes (16 league slots) instead of one (8), so they counted eight flex
+  # spots that do not exist. RB and WR are correspondingly shallower here.
   explicit:
     QB: 17    # 8 fixed + 8 superflex = 16 start, so QB17 is free
-    RB: 23    # 16 fixed + 6 of the 16 W/R/T slots
-    WR: 33    # 24 fixed + 8 of the 16 W/R/T slots
-    TE: 10    # roster-count judgement, not starter demand - see note below
+    RB: 20    # 16 fixed + 3 of the 8 W/R/T slots
+    WR: 29    # 24 fixed + 4 of the 8 W/R/T slots
+    TE: 10    # 8 fixed + 1 of the 8 W/R/T slots
     K: 9      # 8 start, 9th is free
     DST: 9
 
-  # ASSUMPTION TO REVISIT (brief section 4): the two W/R/T slots are assumed to
-  # skew WR, given half PPR and three WRs already required. Shifting this moves
-  # the RB and WR baselines a couple of ranks each.
+  # ASSUMPTION TO REVISIT: the single W/R/T slot is assumed to skew WR, given
+  # half PPR and three WRs already required. Shifting this moves the RB and WR
+  # baselines a rank or two each.
   flex_shares:
-    WRT:  {WR: 0.500, RB: 0.375, TE: 0.125}   # 16 slots -> 8 WR, 6 RB, 2 TE
+    WRT:  {WR: 0.500, RB: 0.375, TE: 0.125}   # 8 slots -> 4 WR, 3 RB, 1 TE
     QWRT: {QB: 1.0}                            # 8 slots -> 8 QB
 
   # Expected bench picks spent per position, as a share of the 48 bench slots.
@@ -168,7 +176,8 @@ notes:
      disproportionately valuable - and the superflex means you need two."
   - "Playoffs take half the field (4 of 8), which weakens the case for
      regular-season dominance and tilts the objective toward ceiling."
-  - "TE baseline of 10 is a roster-count judgement ('about 10 TEs get drafted'),
-     not starter demand. Starter demand under the flex shares above is only
-     ~2-3 TEs. See docs/baselines.md - this is the one entry in the brief's
-     table that does not fall out of the demand arithmetic."
+  - "The brief described this league as having no TE slot and two W/R/T
+     flexes. The live settings page has a TE slot and one W/R/T. Tight end is
+     therefore a normal starting position here, not one you skip, and the
+     brief's RB 23 / WR 33 baselines counted eight flex spots that do not
+     exist."

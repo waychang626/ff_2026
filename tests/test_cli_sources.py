@@ -71,14 +71,14 @@ def test_warns_when_a_position_is_too_shallow_for_its_baseline(tmp_path, capsys)
     rows = [
         f"{src},Player {i},RB,KC,7,100,10,120\n"
         for src in ("CBS", "ESPN")
-        for i in range(5)          # League 1 needs 23 RBs to reach replacement
+        for i in range(5)          # League 1 needs 20 RBs to reach replacement
     ]
     _write(path, rows)
 
     main(["sources", "--league", "cuomo", "--projections", str(path)])
     out = capsys.readouterr().out
     assert "LOW" in out
-    assert "replacement rank 23" in out
+    assert "replacement rank 20" in out
 
 
 def test_a_missing_file_is_reported_not_traced(tmp_path):

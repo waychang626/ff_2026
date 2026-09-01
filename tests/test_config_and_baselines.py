@@ -5,39 +5,45 @@ import pytest
 import yaml
 
 from ffdraft.baselines import derive, explain
+from ffdraft.ids import POSITIONS
 from ffdraft.config import ConfigError, MissingLeagueInput, parse_league
 
 
-def test_league_one_shape_matches_the_brief(cuomo_config):
+def test_league_one_shape_matches_the_settings_page(cuomo_config):
+    """Corrected against the live Yahoo page; the brief had the roster wrong.
+
+    It described no TE slot and two W/R/T flexes. There is a TE slot and one
+    W/R/T, which is three and four ranks of replacement level at RB and WR.
+    """
     assert cuomo_config.teams == 8
     assert cuomo_config.rounds == 17
-    assert cuomo_config.total_drafted == 136          # brief section 4
+    assert cuomo_config.total_drafted == 136
     assert cuomo_config.playoff_teams == 4
+    assert cuomo_config.roster.starters == (
+        "QB", "WR", "WR", "WR", "RB", "RB", "TE", "WRT", "QWRT", "K", "DEF"
+    )
     assert cuomo_config.roster.starters.count("QWRT") == 1   # superflex
-    assert "TE" not in cuomo_config.roster.starters          # no TE slot
+    assert cuomo_config.roster.starters.count("WRT") == 1
+    assert cuomo_config.roster.starters.count("TE") == 1
 
 
-def test_league_one_baselines_match_the_brief(cuomo_config):
+def test_league_one_baselines_match_the_corrected_roster(cuomo_config):
     assert cuomo_config.vor_baseline == {
-        "QB": 17, "RB": 23, "WR": 33, "TE": 10, "K": 9, "DST": 9
+        "QB": 17, "RB": 20, "WR": 29, "TE": 10, "K": 9, "DST": 9
     }
 
 
-def test_starter_demand_derivation_reproduces_every_baseline_except_te(cuomo_config):
-    """The brief's table is starter demand + 1 - apart from TE.
+def test_every_baseline_now_falls_out_of_starter_demand(cuomo_config):
+    """With the real roster there is no discrepancy left to explain.
 
-    QB, RB, WR, K and DST all fall straight out of the arithmetic. TE does not:
-    with no TE slot, starter demand is only ~3, and the brief's 10 is a
-    roster-count judgement instead. Worth pinning down, because the two
-    definitions disagree by seven ranks at exactly the position the league
-    structure makes strange.
+    Against the brief's roster, TE looked like the one entry that did not
+    derive - starter demand said ~3 where the table said 10. That gap was an
+    artifact of the missing TE slot, not a judgement call: with the slot in
+    place, TE derives to exactly 10 along with everything else.
     """
     d = derive(cuomo_config)
-    for pos in ("QB", "RB", "WR", "K", "DST"):
+    for pos in POSITIONS:
         assert d.starter_demand[pos] == cuomo_config.vor_baseline[pos], pos
-    assert d.starter_demand["TE"] == 3
-    assert d.drafted["TE"] == 9
-    assert cuomo_config.vor_baseline["TE"] == 10
 
 
 def test_superflex_doubles_qb_demand(cuomo_config):
@@ -141,34 +147,26 @@ def test_league_two_baselines_all_fall_out_of_starter_demand():
 
 
 def test_replacement_level_differs_by_position_not_uniformly_by_league_size():
-    """The brief expected "much lower replacement levels" across the board in
-    League 2. That holds for RB, TE, K and DST - and is false for WR and QB.
+    """League size alone does not tell you which board is deeper.
 
-    League 1 has 8 teams but requires three WRs and two W/R/T flexes, so 32 WRs
-    start; League 2 has 12 teams but requires two WRs and one flex, so 30 do.
-    Roster shape beats league size. And the superflex makes League 1's QB
-    baseline the deeper of the two by a wide margin.
-
-    This matters practically: it means the two boards are NOT related by a
-    simple shift, and a WR who is a marginal starter in one league is a
-    marginal starter in the other.
+    League 2 has half again as many teams, and is deeper at every skill
+    position - but not by a constant, and not for the reason team count would
+    suggest. The superflex is what makes League 1's QB baseline the deeper of
+    the two despite four fewer teams.
     """
     from ffdraft.config import load_by_id
 
     one, two = load_by_id("cuomo"), load_by_id("league2")
 
-    # Much deeper in League 2, as expected.
-    assert two.vor_baseline["RB"] > one.vor_baseline["RB"] + 5
-    assert two.vor_baseline["TE"] > one.vor_baseline["TE"]
-    assert two.vor_baseline["K"] > one.vor_baseline["K"]
-    assert two.vor_baseline["DST"] > one.vor_baseline["DST"]
+    for pos in ("RB", "WR", "TE", "K", "DST"):
+        assert two.vor_baseline[pos] > one.vor_baseline[pos], pos
 
-    # WR is essentially flat, and slightly deeper in the SMALLER league.
-    assert abs(two.vor_baseline["WR"] - one.vor_baseline["WR"]) <= 3
-    assert one.vor_baseline["WR"] > two.vor_baseline["WR"]
-
-    # Superflex, not team count, drives QB scarcity.
+    # Superflex, not team count, drives QB scarcity - and it runs the other way.
     assert one.vor_baseline["QB"] > two.vor_baseline["QB"] + 3
+
+    # The gaps are nothing like uniform: RB moves 10 ranks, TE only 4.
+    gaps = {p: two.vor_baseline[p] - one.vor_baseline[p] for p in ("RB", "WR", "TE")}
+    assert max(gaps.values()) - min(gaps.values()) >= 4, gaps
 
 
 def test_skill_position_scoring_is_identical_across_leagues(cuomo_config):

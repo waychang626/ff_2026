@@ -880,6 +880,148 @@ def _report_scale(rows, config, found: list[str]) -> None:
         print("  all sources agree on scale within +/-33%")
 
 
+
+# Human labels for the stat keys, so the output can be read straight across
+# from a league settings page instead of decoded from multipliers.
+_STAT_LABELS = {
+    "pass_yds": "passing yards", "pass_tds": "passing TD", "pass_int": "interception",
+    "pass_comp": "completion", "pass_att": "pass attempt",
+    "rush_yds": "rushing yards", "rush_tds": "rushing TD", "rush_att": "rush attempt",
+    "rec": "reception", "rec_yds": "receiving yards", "rec_tds": "receiving TD",
+    "rec_tgt": "target",
+    "fumbles_lost": "fumble lost", "two_pts": "2-pt conversion",
+    "return_tds": "return TD", "return_yds": "return yards",
+    "xp": "extra point", "xp_miss": "missed extra point",
+    "fg_0019": "FG 0-19", "fg_2029": "FG 20-29", "fg_3039": "FG 30-39",
+    "fg_4049": "FG 40-49", "fg_50": "FG 50+", "fg_60": "FG 60+",
+    "fg_miss": "missed FG",
+    "dst_int": "interception", "dst_fum_rec": "fumble recovery",
+    "dst_sacks": "sack", "dst_safety": "safety", "dst_td": "defensive TD",
+    "dst_blk": "blocked kick", "dst_forced_fumble": "forced fumble",
+}
+
+def _compromise(key: str, value: float) -> str | None:
+    """Where the config knowingly cannot say what the league actually does.
+
+    Each of these is a place the engine is a little wrong on purpose, and
+    knowing which way beats discovering it mid-draft. Conditional on the value,
+    not just the key: League 2 penalises every missed field goal at -1, which
+    the single field expresses exactly, so it is not a compromise there.
+    """
+    if key == "fg_miss" and value == 0:
+        return (
+            "set to 0 because a single value cannot express 'only penalise "
+            "misses under 20 yards'. Kickers are slightly over-valued."
+        )
+    if key == "dst_forced_fumble" and value:
+        return "no projection source provides this stat, so it scores as 0"
+    return None
+
+
+def _fmt_rate(key: str, value: float) -> str:
+    """Show yardage rules the way a settings page does: 1 point per N yards."""
+    if key.endswith("_yds") and 0 < value < 1:
+        return f"1 pt per {round(1 / value)} yds"
+    return f"{value:+g} pt" + ("" if abs(value) == 1 else "s")
+
+
+def cmd_rules(args) -> int:
+    """Print a league's settings in a form you can read across from Yahoo/Sleeper.
+
+    The config is the engine's entire model of your league. A wrong `rec` value
+    misprices every receiver on the board and nothing downstream would look
+    odd - so this exists to be checked against the real settings page once,
+    before it matters.
+    """
+    config = load_by_id(args.league)
+    other = load_by_id(args.diff) if args.diff else None
+
+    print(f"{config.name}   [{config.league_id}]")
+    if config.source_path:
+        print(f"  config: {config.source_path}")
+    print()
+    print(f"  {config.teams} teams, {config.draft_type} draft, "
+          f"{config.rounds} rounds, {config.total_drafted} picks")
+    print(f"  starters : {' '.join(config.roster.starters)}")
+    print(f"  bench    : {config.roster.bench}    IR: {config.roster.ir}")
+    print(f"  playoffs : {config.playoff_teams} of {config.teams}, "
+          f"weeks {list(config.playoff_weeks)} "
+          f"(regular season through week {config.regular_season_weeks})")
+    print(f"  my seat  : {config.my_seat if config.my_seat else 'not set'}")
+
+    groups = [
+        ("PASSING", ["pass_yds", "pass_tds", "pass_int", "pass_comp", "pass_att"]),
+        ("RUSHING", ["rush_yds", "rush_tds", "rush_att"]),
+        ("RECEIVING", ["rec", "rec_yds", "rec_tds", "rec_tgt"]),
+        ("MISC", ["fumbles_lost", "two_pts", "return_tds", "return_yds"]),
+        ("KICKING", ["xp", "xp_miss", "fg_0019", "fg_2029", "fg_3039",
+                      "fg_4049", "fg_50", "fg_60", "fg_miss"]),
+        ("TEAM DEFENSE", ["dst_int", "dst_fum_rec", "dst_sacks", "dst_safety",
+                           "dst_td", "dst_blk", "dst_forced_fumble"]),
+    ]
+    values = config.scoring.multipliers
+    other_values = other.scoring.multipliers if other else {}
+
+    for title, keys in groups:
+        present = [k for k in keys if k in values or k in other_values]
+        if not present:
+            continue
+        print(f"\n  {title}")
+        for key in present:
+            label = _STAT_LABELS.get(key, key)
+            mine = values.get(key)
+            shown = _fmt_rate(key, mine) if mine is not None else "not scored"
+            line = f"    {label:<22}{shown:>18}"
+            if other is not None:
+                theirs = other_values.get(key)
+                if theirs != mine:
+                    theirs_shown = (
+                        _fmt_rate(key, theirs) if theirs is not None else "not scored"
+                    )
+                    line += f"   |  {other.league_id}: {theirs_shown}"
+                    line += "   <-- DIFFERS"
+            print(line)
+            if mine is not None:
+                note = _compromise(key, mine)
+                if note:
+                    print(f"      note: {note}")
+
+    if config.scoring.pts_bracket:
+        print("\n  POINTS ALLOWED (team defense)")
+        previous = None
+        for threshold, points in config.scoring.pts_bracket:
+            span = f"{int(previous) + 1}-{int(threshold)}" if previous is not None else f"{int(threshold)}"
+            print(f"    {span:<22}{points:>+18g} pts")
+            previous = threshold
+        if other is not None and other.scoring.pts_bracket != config.scoring.pts_bracket:
+            print(f"    (differs from {other.league_id})")
+
+    print("\n  REPLACEMENT LEVEL (the Nth player at each position is free)")
+    line = "    "
+    for pos in POSITIONS:
+        mine = config.vor_baseline[pos]
+        cell = f"{pos} {mine}"
+        if other is not None and other.vor_baseline[pos] != mine:
+            cell += f" (vs {other.vor_baseline[pos]})"
+        line += f"{cell:<16}"
+    print(line)
+    print("    run `ffdraft baselines` for how these are derived")
+
+    if other is not None:
+        same = config.scoring.offense == other.scoring.offense
+        print(f"\n  vs {other.name}: skill-position scoring is "
+              f"{'IDENTICAL' if same else 'DIFFERENT'}")
+        if same:
+            print("    one projection set serves both leagues")
+
+    if config.notes:
+        print("\n  NOTES")
+        for note in config.notes:
+            wrapped = " ".join(note.split())
+            print(f"    - {wrapped}")
+    return 0
+
+
 # --- wiring ------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ffdraft", description=__doc__)
@@ -894,6 +1036,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--sims", type=int)
         if seat:
             p.add_argument("--seat", type=int)
+
+    p = sub.add_parser("rules", help="print a league's settings, readably")
+    p.add_argument("--league", required=True)
+    p.add_argument("--diff", help="another league_id to compare against")
+    p.set_defaults(func=cmd_rules)
 
     p = sub.add_parser("baselines", help="explain replacement level")
     p.add_argument("--league", required=True)

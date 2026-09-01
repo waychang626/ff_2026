@@ -80,7 +80,7 @@ def test_my_roster_without_a_seat_is_an_error_not_a_guess(cuomo_config):
 
 def test_unfilled_mandatory_slots_tracks_what_must_still_be_drafted(cuomo_config):
     empty = unfilled_mandatory_slots([], cuomo_config)
-    assert empty == {"QB": 1, "RB": 2, "WR": 3, "K": 1, "DST": 1}
+    assert empty == {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "K": 1, "DST": 1}
 
     partial = unfilled_mandatory_slots(["QB", "RB", "WR", "WR", "WR", "TE"], cuomo_config)
     assert partial == {"RB": 1, "K": 1, "DST": 1}

@@ -27,25 +27,32 @@ that position.
 ```
   pos    fixed   flex  bench  starter  drafted  config     gap
   QB         8    8.0    5.8       17       23      17      +0
-  RB        16    6.0   16.8       23       40      23      +0
-  WR        24    8.0   16.8       33       50      33      +0
-  TE         0    2.0    5.8        3        9      10      +7
+  RB        16    3.0   16.8       20       37      20      +0
+  WR        24    4.0   16.8       29       46      29      +0
+  TE         8    1.0    5.8       10       16      10      +0
   K          8    0.0    1.4        9       10       9      +0
   DST        8    0.0    1.4        9       10       9      +0
 ```
 
-Every position is starter demand — except TE, which matches the *drafted*
-definition instead. This is the brief's table and the engine uses it as given;
-the point of printing both columns is that the discrepancy is visible rather
-than buried.
+Every position derives cleanly. Nothing here is a judgement call.
 
-Which one is right for TE depends on what you do with the number. If you are
-asking whether an elite TE beats your fourth receiver for a flex spot, starter
-demand (≈3) is the honest baseline and the brief's 10 flatters every tight end
-by roughly a full tier. If you are asking what you can stream off waivers in
-week 3, 10 is right. The engine's `roster_marginal` handles the first question
-directly — a TE who cannot beat a flex-eligible WR adds nothing to the lineup —
-so the inflated VOR is partly compensated for downstream.
+**This table was wrong until it was checked against the live settings page.**
+The project brief described League 1 as having no TE slot and two W/R/T
+flexes; it has a TE slot and one. Three consequences, all of which had
+propagated into the engine:
+
+1. RB and WR baselines counted eight flex spots that do not exist — 23 and 33
+   where the truth is 20 and 29.
+2. Tight end looked like a position you skip. It is a normal starting position
+   here, and TE10 is its honest replacement level.
+3. TE appeared to be the one entry in the brief's table that did not fall out
+   of the arithmetic — starter demand said ~3 where the table said 10. That gap
+   was entirely an artifact of the missing slot. With the slot in place, TE
+   derives to exactly 10 like everything else.
+
+The lesson is cheap to state and was expensive to find: **check the config
+against the settings page before trusting anything downstream of it.**
+`ffdraft rules --league cuomo` prints it back in settings-page form.
 
 ## League 2
 
@@ -68,7 +75,7 @@ W/R/T slot across the positions eligible to fill it — because it is an
 assumption, not an observation, and assumptions belong in a file you can read
 before the draft rather than in code.
 
-- League 1: `WRT: {WR 0.500, RB 0.375, TE 0.125}` over 16 slots → 8 WR, 6 RB, 2 TE
+- League 1: `WRT: {WR 0.500, RB 0.375, TE 0.125}` over 8 slots → 4 WR, 3 RB, 1 TE
 - League 2: `WRT: {WR 0.50, RB 0.40, TE 0.10}` over 12 slots → 6 WR, 4.8 RB, 1.2 TE
 
 Shifting these moves the RB and WR baselines a rank or two each. The right way
@@ -78,20 +85,26 @@ brief asks you to log every pick.
 
 ## Cross-league comparison
 
-|  | League 1 | League 2 | |
-|---|---|---|---|
-| QB | 17 | 13 | League 1 deeper — **superflex**, not team count |
-| RB | 23 | 30 | as expected |
-| WR | 33 | 31 | **League 1 deeper**, despite 4 fewer teams |
-| TE | 10 | 14 | as expected |
-| K/DST | 9 | 13 | as expected |
+|  | League 1 | League 2 | gap | |
+|---|---|---|---|---|
+| QB | 17 | 13 | **−4** | League 1 deeper — **superflex**, not team count |
+| RB | 20 | 30 | +10 | the biggest move on the board |
+| WR | 29 | 31 | +2 | barely moves |
+| TE | 10 | 14 | +4 | |
+| K/DST | 9 | 13 | +4 | |
 
-The WR row is the surprising one and it is not a rounding artifact: League 1
-starts 32 WRs (24 fixed + 8 flex across 8 teams), League 2 starts 30 (24 + 6
-across 12). Three required receivers and two flexes in a small league outweighs
-two and one in a large league.
+Two rows are worth understanding.
+
+**QB runs backwards.** League 1 has four fewer teams and a deeper quarterback
+board, because the superflex means 16 QBs start instead of 12. Team count is
+not what makes a position scarce; starting slots are.
+
+**WR barely moves while RB moves ten ranks.** League 1 requires three receivers
+and League 2 requires two, so the 50% larger league is only two ranks deeper at
+WR. At running back, where both require two, the team count comes through in
+full.
 
 The practical consequence: **the two boards are not related by a simple shift.**
-A receiver who is a marginal starter in one is a marginal starter in the other,
-while a running back who is a comfortable starter in League 1 is replacement
-level in League 2. Do not carry intuitions from the first draft into the second.
+A receiver is worth about the same in both. A running back who is a comfortable
+starter in League 1 is replacement level in League 2. Do not carry intuitions
+from the first draft into the second.

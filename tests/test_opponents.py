@@ -26,7 +26,9 @@ def test_roster_caps_stop_a_team_hoarding_kickers(seated_config):
 
 
 def test_mandatory_slots_are_the_single_position_starters(seated_config):
-    assert mandatory_slots(seated_config) == {"QB": 1, "RB": 2, "WR": 3, "K": 1, "DST": 1}
+    assert mandatory_slots(seated_config) == {
+        "QB": 1, "RB": 2, "WR": 3, "TE": 1, "K": 1, "DST": 1
+    }
 
 
 def test_completed_drafts_respect_caps_and_fill_mandatory_slots(sim, sample_board, seated_config):

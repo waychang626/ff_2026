@@ -94,19 +94,29 @@ emergent outputs you observe after the fact.
 
 ---
 
-## Where the brief and the arithmetic disagree
+## Where the brief and the arithmetic disagreed
 
-Two places. Both are flagged in the configs, and neither is silently resolved.
+Both entries here were **errors in the brief's description of League 1**, found
+by checking the config against the live Yahoo settings page. The brief had the
+roster wrong — it described no TE slot and two W/R/T flexes, where there is a TE
+slot and one W/R/T — and both apparent findings dissolve once that is fixed.
 
-**League 1's TE baseline.** Every other baseline in the brief's table is exactly
-starter demand + 1. TE is not: with no TE slot, starter demand is ~3, and the
-brief's 10 is a roster-count judgement ("about 10 TEs get drafted"). These are
-two different definitions of replacement — value over the worst starter, versus
-value over the best free agent — and they diverge by seven ranks at exactly the
-position the league structure makes strange. `ffdraft baselines --league cuomo`
-prints both. The engine uses the brief's 10.
+**League 1's TE baseline.** Against the brief's roster, TE looked like the one
+entry in its table that did not derive: starter demand said ~3 where the table
+said 10, and the two definitions of replacement (worst starter vs. best free
+agent) appeared to diverge by seven ranks. With the TE slot in place, starter
+demand *is* 10. There was never a judgement call.
 
-**"Expect much lower replacement levels" in League 2.** True for RB (23→30), TE
-(10→14), K and DST (9→13). False for WR, which is *deeper in the smaller
-league* (33 vs 31), because League 1 requires three WRs and two flexes while
-League 2 requires two and one. Roster shape beats league size.
+**RB and WR baselines.** The brief's RB 23 / WR 33 counted eight W/R/T slots
+that do not exist. The real numbers are RB 20 and WR 29 — a full three and four
+ranks shallower, which moves every VOR on the board.
+
+**"Expect much lower replacement levels" in League 2.** True at every position
+except QB, where League 1 is deeper because of the superflex. But the size of
+the move varies enormously: RB goes 20→30 while WR goes 29→31, because League 1
+requires three receivers and League 2 requires two. League size alone does not
+tell you which board is deeper at a given position.
+
+The general lesson, and the reason `ffdraft rules` exists: a config error is
+invisible downstream. Every number the engine produced from the wrong roster
+was internally consistent, well-tested, and wrong.
