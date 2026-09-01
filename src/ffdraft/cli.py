@@ -191,7 +191,8 @@ def cmd_backtest(args) -> int:
 
 # --- the live console --------------------------------------------------------
 HELP = """
-  <number>          record the pick from the numbered list (fastest)
+  <number>          take that numbered player - the engine's 1/2/3 on your
+                    pick, or the likely-pick list on someone else's
   <name>            record a pick by anyone   (e.g. "bijan gone", "lions d")
   me <name>         record a pick as yours
   go                get a recommendation for the pick on the clock
@@ -222,6 +223,11 @@ def cmd_draft(args) -> int:
     simulator = DraftSimulator(board, config, config.my_seat)
     suggest_n = 0 if args.no_suggest else args.suggest
     suggestions: list[int] = []
+    # The pick number `suggestions` was built for. Without this the list
+    # outlives its pick: on your own turn the variable still held the previous
+    # opponent's shortlist, so a bare number would have silently recorded a
+    # player from a list that was no longer on screen.
+    suggestions_for: int | None = None
     shown_for: int | None = None
     recommended_for: tuple | None = None
 
@@ -245,6 +251,7 @@ def cmd_draft(args) -> int:
             suggestions = _show_suggestions(
                 simulator, board, config, state, suggest_n
             )
+            suggestions_for = state.pick_number
             shown_for = state.pick_number
 
         # Recommend from the loop rather than after recording a pick. Doing it
@@ -257,7 +264,10 @@ def cmd_draft(args) -> int:
             key = (state.pick_number, board.fingerprint())
             if recommended_for != key:
                 print()
-                _recommend_now(config, board, state, audit)
+                suggestions = _recommend_now(
+                    config, board, state, audit, show=args.show
+                )
+                suggestions_for = state.pick_number
                 recommended_for = key
 
         prompt = (
@@ -273,8 +283,9 @@ def cmd_draft(args) -> int:
             continue
 
         try:
+            live = suggestions if suggestions_for == state.pick_number else []
             state, board, done, refresh = _handle(
-                line, state, board, config, log, log_path, audit, suggestions
+                line, state, board, config, log, log_path, audit, live
             )
             if done:
                 break
@@ -382,22 +393,32 @@ def _handle(line, state, board, config, log, log_path, audit, suggestions=()):
     return state, board, False, False
 
 
-def _recommend_now(config, board, state, audit) -> None:
+def _recommend_now(config, board, state, audit, show: int = 3) -> list[int]:
+    """Print the card and the ranked candidates. Returns their board indices.
+
+    The indices come back so a bare number can select from this list the same
+    way it selects from the opponent shortlist - on your own pick, `2` should
+    take the engine's second choice.
+    """
     if state.on_the_clock != config.my_seat:
         print(f"  seat {state.on_the_clock} is on the clock; "
               f"your next pick is {state.my_next_pick()}")
-        return
+        return []
     advice = _recommend(
         config, board, list(state.drafted), state.my_roster, state.pick_number, audit=audit
     )
     print(advice.format_card())
     print()
     print(f"  {'#':<3}{'player':<28}{'VOR':>7}{'surv':>7}{'P(title)':>10}{'delta':>8}")
-    for rec in advice.recommendations[:3]:
+    shown = advice.recommendations[:show]
+    for rec in shown:
         surv = f"{rec.survival:.0%}" if rec.survival == rec.survival else "  -"
         print(f"  {rec.rank:<3}{rec.display[:27]:<28}{rec.vor:7.1f}{surv:>7}"
               f"{rec.p_title:10.2%}{rec.delta_p_title * 100:+8.2f}")
+    if shown:
+        print(f"\n  type 1-{len(shown)} to take one, or type a name")
     print()
+    return [board.idx(rec.player_id) for rec in shown]
 
 
 def _show_suggestions(simulator, board, config, state, n) -> list[int]:
@@ -1118,6 +1139,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--audit", help="where to write the audit log")
     p.add_argument("--suggest", type=int, default=10,
                    help="how many likely picks to list before each opponent pick")
+    p.add_argument("--show", type=int, default=3,
+                   help="how many ranked candidates to offer on your own pick")
     p.add_argument("--no-suggest", action="store_true",
                    help="turn the numbered list off")
     p.set_defaults(func=cmd_draft)

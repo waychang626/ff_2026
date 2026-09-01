@@ -403,6 +403,17 @@ See `docs/research-map.md` for where each research finding lives in the code.
 
 Newest first. Every push updates this section.
 
+### Numbers select on your own pick; fix a stale-shortlist bug
+On your pick the console now lists three ranked candidates and takes `1`, `2`
+or `3` for them (`--show 5` for more), the same one-keystroke path that already
+existed for opponent picks.
+
+Building it surfaced a latent bug worth more than the feature: the shortlist
+variable persisted across turns, so on your own pick it still held the previous
+opponent's list. A bare number would have silently recorded a player from a
+list no longer on screen. Shortlists are now scoped to the pick they were built
+for and are ignored the moment that pick passes.
+
 ### Fix: the first seat got no recommendation
 Reported from a live mock. The console only recommended *after* recording a
 pick, so whoever holds 1.01 opened it, saw the prompt, and got nothing —

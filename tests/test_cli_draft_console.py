@@ -97,3 +97,51 @@ def test_no_suggest_turns_the_list_off(monkeypatch, capsys, tmp_path):
     out = _run(monkeypatch, capsys, tmp_path, ["quit"], seat=8,
                extra=["--no-suggest"])
     assert "likely for seat" not in out
+
+
+def test_a_number_on_your_own_pick_takes_that_ranked_candidate(
+    monkeypatch, capsys, tmp_path
+):
+    """`2` should take the engine's second choice, not its first."""
+    out = _run(monkeypatch, capsys, tmp_path, ["2", "quit"], seat=1)
+    ranked = [
+        line for line in out.splitlines()
+        if line.strip().startswith("2  ") and "(" in line
+    ]
+    assert ranked, out
+    second = ranked[0].split("(")[0].split("2  ")[1].strip()
+    recorded = [line for line in out.splitlines() if "1. seat 1:" in line]
+    assert recorded and second in recorded[0], f"{second!r} not in {recorded}"
+
+
+def test_the_console_says_the_numbers_are_selectable(monkeypatch, capsys, tmp_path):
+    out = _run(monkeypatch, capsys, tmp_path, ["quit"], seat=1)
+    assert "type 1-3 to take one, or type a name" in out
+
+
+def test_show_controls_how_many_candidates_are_offered(monkeypatch, capsys, tmp_path):
+    out = _run(monkeypatch, capsys, tmp_path, ["quit"], seat=1, extra=["--show", "5"])
+    assert "type 1-5 to take one" in out
+
+
+def test_a_number_past_the_end_of_the_list_is_refused(monkeypatch, capsys, tmp_path):
+    out = _run(monkeypatch, capsys, tmp_path, ["9", "quit"], seat=1)
+    assert "pick a number from 1 to 3" in out
+    assert "1. seat 1:" not in out, "nothing should have been recorded"
+
+
+def test_a_shortlist_never_outlives_its_pick(monkeypatch, capsys, tmp_path):
+    """The latent bug behind this feature.
+
+    `suggestions` used to persist across turns, so on your own pick the
+    variable still held the previous opponent's shortlist - and with the
+    opponent list switched off, your own stale recommendation would still be
+    sitting there on someone else's pick. Either way a bare number would
+    silently record a player from a list nobody could see.
+    """
+    out = _run(monkeypatch, capsys, tmp_path,
+               ["me troy thomas", "1", "quit"], seat=1,
+               extra=["--no-suggest"])
+    # Pick 1 was mine; pick 2 belongs to seat 2 and has no visible list.
+    assert "no board match for '1'" in out
+    assert "2. seat 2:" not in out, "a stale list recorded a pick"

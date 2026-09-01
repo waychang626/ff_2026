@@ -157,7 +157,8 @@ don't have to ask for it.
 
 | Type this | It does |
 |---|---|
-| `3` | Records suggestion #3 — **the fast path, use this** |
+| `3` | Takes numbered player #3 — **the fast path, use this** |
+| | On *your* pick that is the engine's 3rd choice; on someone else's it is the 3rd likely pick |
 | `bijan gone` | Records a pick by whoever is on the clock |
 | `me josh allen` | Records the pick as yours |
 | `go` | Re-run the recommendation for your current pick |
@@ -193,6 +194,26 @@ If a player was entered who was never actually drafted, `fix` him to whoever
 really went there. There is no "delete a pick" — the pick happened, someone got
 picked, and a log with a hole in it would put every later pick on the wrong
 seat.
+
+### Numbers work on your own pick too
+
+When it is your turn the console prints the three ranked candidates and a
+reminder:
+
+```
+  #  player                          VOR   surv  P(title)   delta
+  1  Bijan Robinson (RB, ATL)      127.4     1%    13.00%   +0.00
+  2  Jahmyr Gibbs (RB, DET)        116.8     4%    12.10%   -0.90
+  3  Puka Nacua (WR, LAR)          104.9    22%    11.60%   -1.40
+
+  type 1-3 to take one, or type a name
+```
+
+Type `2` and it drafts Gibbs to your roster. `--show 5` offers five instead.
+
+Numbers are always scoped to the list currently on screen — the engine's
+ranking on your pick, the likely-pick list on someone else's. A list never
+survives past the pick it was built for.
 
 ### The numbered list — use it
 
