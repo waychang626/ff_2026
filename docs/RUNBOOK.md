@@ -22,13 +22,25 @@ python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-Then use `.venv/bin/ffdraft` everywhere. Don't rely on `source .venv/bin/activate`
-- on draft day you will open a fresh terminal, forget, and hit the same error
-mid-draft. Add an alias to `~/.zshrc` if you want the short name:
+Then give yourself the short name, running this **from the repo root** so
+`$PWD` resolves to the real path:
 
 ```bash
-alias ffdraft="$HOME/path/to/ff_2026/.venv/bin/ffdraft"
+grep -q 'alias ffdraft=' ~/.zshrc || echo "alias ffdraft=\"$PWD/.venv/bin/ffdraft\"" >> ~/.zshrc
+source ~/.zshrc
 ```
+
+Or, if you want a real command that also works in scripts:
+
+```bash
+sudo ln -sf "$PWD/.venv/bin/ffdraft" /usr/local/bin/ffdraft
+```
+
+Either works from any directory - the installed script's shebang points at the
+venv's Python, so it finds numpy wherever you call it from.
+
+Don't rely on `source .venv/bin/activate`. On draft day you will open a fresh
+terminal, forget to activate, and hit `command not found` mid-draft.
 
 Skipping the install entirely? Every command works as
 `PYTHONPATH=src python3 -m ffdraft.cli ...` from the repo root. (Plain
