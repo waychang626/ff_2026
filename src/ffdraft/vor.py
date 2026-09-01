@@ -147,20 +147,47 @@ def roster_marginal(
     my_roster: list[str],
     candidate_id: str,
     config: LeagueConfig,
+    replacement: dict[str, float] | None = None,
 ) -> float:
-    """Improvement in best-lineup season points from adding one player.
+    """How much this player improves your lineup *over a free one at his position*.
 
-    This is "team need", derived. A third quarterback in a two-QB league scores
-    zero here no matter how good he is, and no flag had to be passed to say so.
+    "Team need", derived - a third quarterback in a two-QB league scores zero
+    here no matter how good he is, and no flag had to be passed to say so.
+
+    The subtraction is the important part. Measuring raw lineup improvement
+    instead is wrong in a way that is easy to miss, because on an empty roster
+    every player improves the lineup by exactly his own projection: the measure
+    silently degenerates into raw projected points, which is precisely the
+    cross-position bias VOR exists to remove. In a superflex league that put
+    four quarterbacks in the top six of the shortlist while running backs with
+    higher VOR sat below them - a quarterback outscores a running back without
+    being worth more than the next quarterback.
+
+    Subtracting what a replacement-level player at the same position would have
+    contributed fixes it. On an empty roster this reduces exactly to VOR; it
+    diverges only where it should, when the slots a position can fill are
+    already taken.
     """
     positions = {pid: board.player(pid).pos for pid in my_roster}
     scores = {pid: float(board.points[board.idx(pid)]) for pid in my_roster}
     before = best_lineup_points(scores, positions, config.roster)
 
-    positions[candidate_id] = board.player(candidate_id).pos
+    pos = board.player(candidate_id).pos
+    positions[candidate_id] = pos
     scores[candidate_id] = float(board.points[board.idx(candidate_id)])
     after = best_lineup_points(scores, positions, config.roster)
-    return after - before
+    gain = after - before
+
+    if replacement is None:
+        return gain
+
+    # What a freely available player at the same position would have added.
+    del positions[candidate_id], scores[candidate_id]
+    sentinel = "__replacement__"
+    positions[sentinel] = pos
+    scores[sentinel] = replacement.get(pos, 0.0)
+    free_gain = best_lineup_points(scores, positions, config.roster) - before
+    return gain - free_gain
 
 
 def candidate_shortlist(
@@ -183,6 +210,7 @@ def candidate_shortlist(
     to reflect the real board even for a position you are barred from adding.
     """
     vor = vor_array(board, available, config.vor_baseline)
+    replacement = replacement_points(board, available, config.vor_baseline)
     live = np.flatnonzero(available if selectable is None else selectable)
     if live.size == 0:
         return []
@@ -192,9 +220,11 @@ def candidate_shortlist(
     scored: list[tuple[float, int]] = []
     for i in prelim:
         pid = board.players[i].player_id
-        marginal = roster_marginal(board, my_roster, pid, config)
+        marginal = roster_marginal(board, my_roster, pid, config, replacement)
         # Equal blend: VOR alone over-drafts positions you have filled,
-        # marginal alone over-drafts whatever slot happens to be empty.
+        # marginal alone over-drafts whatever slot happens to be empty. Both
+        # terms are now replacement-adjusted, so neither can smuggle raw
+        # points back in.
         scored.append((0.5 * float(vor[i]) + 0.5 * marginal, int(i)))
     scored.sort(key=lambda t: (-round(t[0], 6), board.players[t[1]].player_id))
     return [i for _, i in scored[:size]]

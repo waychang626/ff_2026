@@ -403,6 +403,19 @@ See `docs/research-map.md` for where each research finding lives in the code.
 
 Newest first. Every push updates this section.
 
+### Fix: the shortlist was over-drafting quarterbacks
+Reported from a superflex mock that kept recommending back-to-back QBs. The
+shortlist blended VOR with "how much this player improves your lineup" — but on
+an empty roster every player improves the lineup by exactly his own projection,
+so that second term silently *was* raw projected points, which is precisely the
+cross-position bias VOR exists to remove. Four quarterbacks sat in the top six
+while running backs with higher VOR ranked below them.
+
+Lineup improvement is now measured against what a freely available player at
+the same position would have contributed. On an empty roster it reduces exactly
+to VOR; it diverges only where it should, when the slots a position can fill
+are already taken. A superflex second QB still counts; a third scores zero.
+
 ### Numbers select on your own pick; fix a stale-shortlist bug
 On your pick the console now lists three ranked candidates and takes `1`, `2`
 or `3` for them (`--show 5` for more), the same one-keystroke path that already
