@@ -203,7 +203,7 @@ HELP = """
   board [pos]       show the best available
   out <name> : <r>  rule a player out for the season, with a reason
   bump <name> <x> : <r>   multiply a player's projection by x
-  save [path]       write the pick log
+  save              write the pick log
   help / quit
 """
 
@@ -303,6 +303,128 @@ def cmd_draft(args) -> int:
     return 0
 
 
+def _word(lower: str, word: str) -> bool:
+    """`lower` is exactly `word`, or `word` followed by an argument.
+
+    Not `startswith`: the board has a Logan and a Boarders on it, and
+    `lower.startswith("log")` quietly turned a pick into a log listing.
+    """
+    return lower == word or lower.startswith(word + " ")
+
+
+def _shared_command(line, state, board, config, log, log_path, audit,
+                    help_text=HELP):
+    """Commands that mean the same thing in the live console and in `mock`.
+
+    Both consoles route input through here first, so a command learned in
+    practice behaves identically under a clock. `mock` used to accept a strict
+    subset - no `log`, no `undo`, no `fix`, no `roster <seat>` - which is the
+    one thing a rehearsal must not do.
+
+    Returns (state, board, handled, refresh). `handled` is False when the line
+    is not one of these and the caller should read it itself. `refresh` means
+    the state or the board moved, so any recommendation on screen is stale.
+    """
+    lower = line.lower()
+    if lower in ("help", "?", "h"):
+        print(help_text)
+        return state, board, True, False
+    if lower == "save":
+        log.save(log_path)
+        print(f"  saved {len(log.picks)} picks to {log_path}")
+        return state, board, True, False
+    if lower == "undo":
+        if not log.picks:
+            print("  nothing to undo")
+            return state, board, True, False
+        removed = log.picks.pop()
+        state = state.undo()
+        print(f"  undid pick {removed.pick}: {removed.player_id}")
+        return state, board, True, True
+    if _word(lower, "log"):
+        parts = line.split()
+        _show_log(board, state, config, _count_arg(parts, 12))
+        return state, board, True, False
+    if _word(lower, "fix"):
+        state = _fix_pick(line, state, board, log, log_path)
+        return state, board, True, True
+    if _word(lower, "roster"):
+        parts = line.split()
+        seat = _seat_arg(parts, config)
+        if seat is not None:
+            _show_roster(board, state, seat, config)
+        return state, board, True, False
+    if _word(lower, "board"):
+        parts = line.split()
+        _show_available(board, state, config, parts[1].upper() if len(parts) > 1 else None)
+        return state, board, True, False
+    if _word(lower, "out") or _word(lower, "bump"):
+        board = _apply_update(line, board, state, config, audit)
+        return state, board, True, True
+    return state, board, False, False
+
+
+def _count_arg(parts, default: int) -> int:
+    if len(parts) < 2:
+        return default
+    try:
+        return int(parts[1])
+    except ValueError:
+        print(f"  ! {parts[1]!r} is not a number; showing {default}")
+        return default
+
+
+def _seat_arg(parts, config) -> int | None:
+    """The seat for `roster [seat]`. None means the argument was unusable."""
+    if len(parts) < 2:
+        return config.my_seat
+    try:
+        seat = int(parts[1])
+    except ValueError:
+        print(f"  ! {parts[1]!r} is not a seat number (1-{config.teams})")
+        return None
+    if not 1 <= seat <= config.teams:
+        print(f"  ! seat {seat} does not exist; this league has "
+              f"{config.teams} seats")
+        return None
+    return seat
+
+
+def _select(text, board, state, shortlist=()):
+    """Turn one typed line into a player: a bare number, or a name.
+
+    A bare number picks off the numbered list. That is the whole point of the
+    list: entering someone else's pick is the slowest thing you do in a live
+    draft and the one place a typo silently corrupts the log. Shared with
+    `mock` so `2` means the same thing in practice as it does on the day.
+
+    Returns the player, or None having already printed why not.
+    """
+    text = text.strip()
+    if text.isdigit() and shortlist:
+        choice = int(text)
+        if not 1 <= choice <= len(shortlist):
+            print(f"  ! pick a number from 1 to {len(shortlist)}, or type a name")
+            return None
+        player = board.players[shortlist[choice - 1]]
+    else:
+        resolution = board.resolver.resolve(text)
+        if not resolution.found:
+            print(f"  ! {resolution.note}")
+            return None
+        if resolution.ambiguous:
+            print(f"  ! {resolution.note}")
+            print("    say which one - add the position (e.g. 'josh QB') "
+                  "or type the full name")
+            return None
+        player = resolution.best
+    if player.player_id in state.drafted:
+        print(f"  ! {player.display} was already taken at pick "
+              f"{state.drafted.index(player.player_id) + 1}")
+        return None
+    return player
+
+
 def _handle(line, state, board, config, log, log_path, audit, suggestions=()):
     """Returns (state, board, done, refresh).
 
@@ -312,42 +434,15 @@ def _handle(line, state, board, config, log, log_path, audit, suggestions=()):
     lower = line.lower()
     if lower in ("quit", "exit", "q"):
         return state, board, True, False
-    if lower in ("help", "?", "h"):
-        print(HELP)
-        return state, board, False, False
-    if lower == "save":
-        log.save(log_path)
-        print(f"  saved {len(log.picks)} picks to {log_path}")
-        return state, board, False, False
-    if lower == "undo":
-        if not log.picks:
-            print("  nothing to undo")
-            return state, board, False, False
-        removed = log.picks.pop()
-        state = state.undo()
-        print(f"  undid pick {removed.pick}: {removed.player_id}")
-        return state, board, False, True
-    if lower.startswith("log"):
-        parts = line.split()
-        _show_log(board, state, config, int(parts[1]) if len(parts) > 1 else 12)
-        return state, board, False, False
-    if lower.startswith("fix "):
-        state = _fix_pick(line, state, board, log, log_path)
-        return state, board, False, True
-    if lower.startswith("roster"):
-        parts = line.split()
-        seat = int(parts[1]) if len(parts) > 1 else config.my_seat
-        _show_roster(board, state, seat, config)
-        return state, board, False, False
-    if lower.startswith("board"):
-        parts = line.split()
-        _show_available(board, state, config, parts[1].upper() if len(parts) > 1 else None)
-        return state, board, False, False
+
+    state, board, handled, refresh = _shared_command(
+        line, state, board, config, log, log_path, audit
+    )
+    if handled:
+        return state, board, False, refresh
+
     if lower in ("go", "rec", "."):
         _recommend_now(config, board, state, audit)
-        return state, board, False, False
-    if lower.startswith("out ") or lower.startswith("bump "):
-        board = _apply_update(line, board, state, config, audit)
         return state, board, False, False
 
     # Otherwise: a pick.
@@ -356,29 +451,8 @@ def _handle(line, state, board, config, log, log_path, audit, suggestions=()):
     if lower.startswith("me "):
         mine, text = True, line[3:]
 
-    # A bare number picks off the suggestion list. This is the whole point of
-    # the list: entering someone else's pick is the slowest thing you do in a
-    # live draft and the one place a typo silently corrupts the log.
-    if text.strip().isdigit() and suggestions:
-        choice = int(text.strip())
-        if not 1 <= choice <= len(suggestions):
-            print(f"  ! pick a number from 1 to {len(suggestions)}, or type a name")
-            return state, board, False, False
-        player = board.players[suggestions[choice - 1]]
-    else:
-        resolution = board.resolver.resolve(text)
-        if not resolution.found:
-            print(f"  ! {resolution.note}")
-            return state, board, False, False
-        if resolution.ambiguous:
-            print(f"  ! {resolution.note}")
-            print("    say which one - add the position (e.g. 'josh QB') "
-                  "or type the full name")
-            return state, board, False, False
-        player = resolution.best
-    if player.player_id in state.drafted:
-        print(f"  ! {player.display} was already taken at pick "
-              f"{state.drafted.index(player.player_id) + 1}")
+    player = _select(text, board, state, suggestions)
+    if player is None:
         return state, board, False, False
 
     seat = state.on_the_clock
@@ -393,20 +467,17 @@ def _handle(line, state, board, config, log, log_path, audit, suggestions=()):
     return state, board, False, False
 
 
-def _recommend_now(config, board, state, audit, show: int = 3) -> list[int]:
+def _print_advice(board, advice, show: int = 3) -> list[int]:
     """Print the card and the ranked candidates. Returns their board indices.
 
     The indices come back so a bare number can select from this list the same
     way it selects from the opponent shortlist - on your own pick, `2` should
     take the engine's second choice.
+
+    Split out from `_recommend_now` so `mock` renders an identical screen from
+    the advice it has already computed, rather than a second layout that can
+    drift away from this one.
     """
-    if state.on_the_clock != config.my_seat:
-        print(f"  seat {state.on_the_clock} is on the clock; "
-              f"your next pick is {state.my_next_pick()}")
-        return []
-    advice = _recommend(
-        config, board, list(state.drafted), state.my_roster, state.pick_number, audit=audit
-    )
     print(advice.format_card())
     print()
     print(f"  {'#':<3}{'player':<28}{'VOR':>7}{'surv':>7}{'P(title)':>10}{'delta':>8}")
@@ -419,6 +490,17 @@ def _recommend_now(config, board, state, audit, show: int = 3) -> list[int]:
         print(f"\n  type 1-{len(shown)} to take one, or type a name")
     print()
     return [board.idx(rec.player_id) for rec in shown]
+
+
+def _recommend_now(config, board, state, audit, show: int = 3) -> list[int]:
+    if state.on_the_clock != config.my_seat:
+        print(f"  seat {state.on_the_clock} is on the clock; "
+              f"your next pick is {state.my_next_pick()}")
+        return []
+    advice = _recommend(
+        config, board, list(state.drafted), state.my_roster, state.pick_number, audit=audit
+    )
+    return _print_advice(board, advice, show)
 
 
 def _show_suggestions(simulator, board, config, state, n) -> list[int]:
@@ -600,13 +682,23 @@ def cmd_llm(args) -> int:
 
 
 
+# Deliberately the live console's list plus `auto`. Practice is worthless if
+# the command you reach for on draft day was not in the thing you practised on.
 MOCK_HELP = """
   <enter>           take the engine's #1 pick
-  <name>            take someone else instead
+  <number>          take that numbered candidate instead
+  <name>            take someone else entirely
+  go                reprint the recommendation
+  undo              take back the last pick
+  log [n]           show the last n picks with their numbers
+  fix <n> <name>    correct pick n (use when a name resolved to the wrong guy)
+  roster [seat]     show a roster - yours, or any opponent's
   board [pos]       show the best available
-  roster            show your roster so far
+  out <name> : <r>  rule a player out for the season, with a reason
+  bump <name> <x> : <r>   multiply a player's projection by x
+  save              write the pick log
   auto              let the engine finish the draft for you
-  quit              stop here
+  help / quit
 """
 
 
@@ -667,20 +759,19 @@ def cmd_mock(args) -> int:
         print()
         print(f"  --- YOUR PICK (round {state.current_round}, overall "
               f"{state.pick_number}) ---")
-        print(advice.format_card())
-        print()
-        for rec in advice.recommendations[:3]:
-            surv = f"{rec.survival:.0%}" if rec.survival == rec.survival else "  -"
-            print(f"  {rec.rank}. {rec.display[:30]:<31}VOR {rec.vor:6.1f}  "
-                  f"survives {surv:>4}  P(title) {rec.p_title:.1%}")
+        shortlist = _print_advice(board, advice, show=args.show)
 
         choice = None
-        while choice is None:
+        # `undo`, `fix` and a projection update all move the state out from
+        # under the advice on screen. Drop back to the outer loop and re-run
+        # the engine rather than letting a stale shortlist record a pick.
+        replan = False
+        while choice is None and not replan:
             if auto:
                 choice = advice.recommendations[0].player_id
                 break
             try:
-                line = input("\n  pick> ").strip()
+                line = input("  pick> ").strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 line = "quit"
@@ -692,25 +783,31 @@ def cmd_mock(args) -> int:
                 auto = True
                 choice = advice.recommendations[0].player_id
                 break
-            if low == "roster":
-                _show_roster(board, state, seat, config)
-                continue
-            if low.startswith("board"):
-                parts = line.split()
-                _show_available(board, state, config,
-                                parts[1].upper() if len(parts) > 1 else None)
-                continue
             if not line:
                 choice = advice.recommendations[0].player_id
                 break
-            resolution = board.resolver.resolve(line)
-            if not resolution.found or resolution.ambiguous:
-                print(f"  ! {resolution.note or 'no match'}")
+            if low in ("go", "rec", "."):
+                # Reprint what we already have. Re-running the engine here
+                # would cost another full simulation to redraw the same rows.
+                shortlist = _print_advice(board, advice, show=args.show)
                 continue
-            if resolution.best.player_id in state.drafted:
-                print(f"  ! {resolution.best.display} is already gone")
+            try:
+                state, board, handled, refresh = _shared_command(
+                    line, state, board, config, log, log_path, audit,
+                    help_text=MOCK_HELP,
+                )
+                if handled:
+                    replan = refresh
+                    continue
+                player = _select(line, board, state, shortlist)
+            except (DraftStateError, ConfigError, KeyError, ValueError) as exc:
+                print(f"  ! {exc}")
                 continue
-            choice = resolution.best.player_id
+            if player is not None:
+                choice = player.player_id
+
+        if replan:
+            continue
 
         print(f"  -> you take {board.player(choice).display}\n")
         state = state.record(choice)
@@ -1157,6 +1254,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="opponent-behaviour seed; omit for a different mock each run")
     p.add_argument("--auto", action="store_true",
                    help="let the engine pick for you too, and just show the roster")
+    p.add_argument("--show", type=int, default=3,
+                   help="how many ranked candidates to offer on your own pick")
     p.add_argument("--out", help="where to write the mock pick log")
     p.add_argument("--audit", help="where to write the audit log")
     p.set_defaults(func=cmd_mock)

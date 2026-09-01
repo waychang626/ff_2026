@@ -364,7 +364,7 @@ Built and tested in a container with no R and no outbound access to the
 projection sources, so:
 
 **Verified** — the whole Python engine, end to end, against a synthetic board:
-122 tests, determinism, greedy-vs-brute-force lineups, the calibration
+205 tests, determinism, greedy-vs-brute-force lineups, the calibration
 arithmetic, the opponent model's herding, the endogenous variance appetite, both
 league configs, the replay harness and the backtester.
 
@@ -383,7 +383,7 @@ result.
 ## Testing
 
 ```bash
-python -m pytest              # 122 tests, ~32s
+python -m pytest              # 205 tests, ~45s
 python -m pytest tests/test_variance_appetite.py -v   # the §3.1 behaviour
 ```
 
@@ -498,6 +498,16 @@ seat still needs, and whether a run is on.
 that pick 40 went in as the wrong Josh. `fix` swaps one recorded pick and
 refuses anything that would corrupt the log.
 
+### One console surface, so practice matches draft day
+`mock` accepted a strict subset of the live console: no `log`, no `undo`, no
+`fix`, `roster` with no seat argument, and a bare `2` resolved as a *player
+name* rather than taking the engine's second choice. A rehearsal that teaches
+commands the real thing does not have is worse than no rehearsal. Both consoles
+now dispatch through one `_shared_command`, so the vocabularies cannot drift; a
+parity test drives every verb through both. Also fixes `startswith("log")`
+matching a pick for Logan, and `roster 99` reporting an empty seat instead of
+saying the seat does not exist.
+
 ### Mock draft mode; fix a K/DST over-draft it exposed
 `ffdraft mock` fills every other seat from the opponent model. Running it
 immediately showed the engine filling its whole bench with kickers and
@@ -513,4 +523,4 @@ with the brief's open-item verification.
 ### Initial build
 The engine end to end in the brief's build order: replay harness first, then
 projections, calibration, VOR, opponent model, Monte Carlo, `recommend_pick`,
-and the LLM layer last. 122 tests.
+and the LLM layer last. 205 tests.
