@@ -175,6 +175,9 @@ don't have to ask for it.
 
 Names are fuzzy. `bijan`, `lions d`, `jamarr`, `harrison jr` all work.
 
+The same table applies to `ffdraft mock` — both consoles dispatch through one
+function, so practice and draft day cannot drift apart.
+
 ### Fixing a pick you got wrong
 
 `undo` only reaches the **last** pick. The usual mistake is noticing at pick 45
@@ -300,12 +303,17 @@ ffdraft mock --league league2 --seat 5              # you pick, it drafts the re
 ffdraft mock --league league2 --seat 5 --auto       # it picks for you too, ~20s
 ```
 
-At each of your picks: press **Enter** to take the engine's #1, or type a name
-to take someone else. `board RB`, `roster`, and `auto` also work.
+At each of your picks: press **Enter** to take the engine's #1, type `2` to
+take its second choice, or type a name to take someone else. **Every console
+command above works here** — `roster 3`, `log 20`, `fix 12 josh allen`, `undo`,
+`out <name> : <reason>`, `board RB`, `go`. That is the point of the mode: a
+command you reach for under a clock should be one you have already used. `auto`
+hands the rest of the draft to the engine.
 
-This does *not* rehearse the part that actually goes wrong on draft day, which
-is keeping up with entering other people's picks. Use it to sanity-check the
-engine, not to practise.
+What it does *not* rehearse is the part that actually goes wrong on draft day,
+which is keeping up with entering other people's picks — here they enter
+themselves. Use it to learn the commands and sanity-check the engine; use a
+real mock draft room to practise typing.
 
 ---
 
