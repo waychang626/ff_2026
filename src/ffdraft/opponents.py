@@ -242,6 +242,79 @@ class DraftSimulator:
 
         return RolloutResult(rosters=rosters, available_at=snapshots, n_sims=n_sims)
 
+    def likely_next_picks(
+        self,
+        drafted_idx: list[int],
+        seat: int,
+        n: int = 10,
+        n_sims: int = 4000,
+        seed: int | None = None,
+        last_pos_code: int | None = None,
+        pick_number: int | None = None,
+    ) -> list[tuple[int, float]]:
+        """Who the seat on the clock most likely takes next, with probabilities.
+
+        Typing an opponent's pick by name is the slowest thing you do in a live
+        draft, and it is the one place a typo silently corrupts the log. A short
+        numbered list you can answer with one keystroke removes both problems -
+        but only if the list is usually right, which is why it comes from the
+        same opponent model the recommender uses rather than from raw ADP.
+
+        Under that model a team ranks the board by ADP plus a private noise
+        draw and takes the best legal player left, so P(a player goes next) is
+        just P(his perceived rank is the minimum). That needs one noise draw
+        per simulation, not a rollout - it is a single vectorised argmin and
+        costs milliseconds.
+
+        Returns (board index, probability) pairs, longest odds last.
+        """
+        cfg = self.config
+        rng = np.random.default_rng(seed)
+
+        available = np.ones(self.n_players, dtype=bool)
+        if drafted_idx:
+            available[np.asarray(drafted_idx, dtype=np.int64)] = False
+
+        # What this seat may still legally add.
+        counts = np.zeros(N_POS, dtype=np.int64)
+        for n_pick, idx in enumerate(drafted_idx, start=1):
+            if pick_owner(n_pick, cfg.teams, cfg.draft_type) == seat:
+                counts[int(self.board.pos_code[idx])] += 1
+        legal_pos = counts < self.caps
+
+        picks_made = int(counts.sum())
+        picks_left = cfg.rounds - picks_made
+        short = np.maximum(self.mandatory - counts, 0)
+        if short.sum() >= picks_left:
+            legal_pos = short > 0
+
+        playable = available & legal_pos[self.board.pos_code]
+        if not playable.any():
+            playable = available
+        if not playable.any():
+            return []
+
+        perceived = self.board.adp[None, :] + rng.normal(
+            0.0, cfg.opponents.adp_noise_picks, size=(n_sims, self.n_players)
+        )
+
+        # A run in progress pulls that position up the board.
+        if last_pos_code is not None and self.herd_bonus > 0 and pick_number is not None:
+            opp = cfg.opponents
+            pos_name = POSITIONS[last_pos_code]
+            herding = pos_name in opp.herding_positions and (
+                pos_name in opp.always_herd_positions
+                or pick_number <= opp.herding_qb_pick_limit
+            )
+            if herding:
+                perceived[:, self.board.pos_code == last_pos_code] -= self.herd_bonus
+
+        perceived = np.where(playable[None, :], perceived, np.inf)
+        winners = np.argmin(perceived, axis=1)
+        idxs, hits = np.unique(winners, return_counts=True)
+        order = np.argsort(-hits, kind="stable")[:n]
+        return [(int(idxs[i]), float(hits[i]) / n_sims) for i in order]
+
     def next_selection(
         self,
         drafted_idx: list[int],

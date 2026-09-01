@@ -123,6 +123,7 @@ don't have to ask for it.
 
 | Type this | It does |
 |---|---|
+| `3` | Records suggestion #3 — **the fast path, use this** |
 | `bijan gone` | Records a pick by whoever is on the clock |
 | `me josh allen` | Records the pick as yours |
 | `go` | Re-run the recommendation for your current pick |
@@ -158,6 +159,30 @@ If a player was entered who was never actually drafted, `fix` him to whoever
 really went there. There is no "delete a pick" — the pick happened, someone got
 picked, and a log with a hole in it would put every later pick on the wrong
 seat.
+
+### The numbered list — use it
+
+Before every opponent pick the console prints the ten players most likely to go
+next, with probabilities:
+
+```
+  likely for seat 2 (type the number; 93% of the time it is one of these)
+    1  Quentin Carter           RB  WAS    22%
+    2  Roman Harrison           RB  HOU    18%
+    3  Troy Thomas              RB  CAR    13%
+    ...
+```
+
+Type `3` and it records Troy Thomas. One keystroke instead of a name.
+
+The real pick is on that list about 90% of the time in the early rounds. When
+it isn't, type the name as usual — both always work.
+
+The list comes from the same opponent model the recommender uses, so it
+accounts for who is already gone, what that specific seat still needs, and
+whether a positional run is underway. It is not just ADP order.
+
+Turn it off with `--no-suggest`, or change the length with `--suggest 15`.
 
 ### Timing
 
@@ -388,6 +413,7 @@ ffdraft check     --league <id> --seat <n>          # preflight
 ffdraft board     --league <id> [--pos RB] [--top 30]
 ffdraft baselines --league <id>                     # replacement-level arithmetic
 ffdraft draft     --league <id> --seat <n> [--sims 1000] [--out <path>]
+                  [--suggest 10 | --no-suggest]
 ffdraft mock      --league <id> --seat <n> [--auto] [--seed N]
 ffdraft replay    --league <id> --log <path> [--check]
 ffdraft backtest  --league <id> --log <path> --actuals <path>

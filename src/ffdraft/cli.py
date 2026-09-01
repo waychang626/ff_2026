@@ -180,6 +180,7 @@ def cmd_backtest(args) -> int:
 
 # --- the live console --------------------------------------------------------
 HELP = """
+  <number>          record the pick from the numbered list (fastest)
   <name>            record a pick by anyone   (e.g. "bijan gone", "lions d")
   me <name>         record a pick as yours
   go                get a recommendation for the pick on the clock
@@ -205,12 +206,29 @@ def cmd_draft(args) -> int:
     log_path = Path(args.out or f"logs/draft_{config.league_id}.jsonl")
     state = DraftState(config=config, drafted=[], my_seat=config.my_seat)
 
+    from .opponents import DraftSimulator
+
+    simulator = DraftSimulator(board, config, config.my_seat)
+    suggest_n = 0 if args.no_suggest else args.suggest
+    suggestions: list[int] = []
+    shown_for: int | None = None
+
     print(f"{config.name} - seat {config.my_seat} of {config.teams}, "
           f"{config.rounds} rounds, {config.sim.n_sims} sims/pick")
     print(f"pick log -> {log_path}")
     print(HELP)
 
     while not state.is_complete:
+        if (
+            suggest_n
+            and state.on_the_clock != config.my_seat
+            and shown_for != state.pick_number
+        ):
+            suggestions = _show_suggestions(
+                simulator, board, config, state, suggest_n
+            )
+            shown_for = state.pick_number
+
         prompt = (
             f"[R{state.current_round} p{state.pick_number} "
             f"{'YOU' if state.on_the_clock == config.my_seat else f'seat {state.on_the_clock}'}]> "
@@ -224,7 +242,9 @@ def cmd_draft(args) -> int:
             continue
 
         try:
-            state, board, done = _handle(line, state, board, config, log, log_path, audit)
+            state, board, done = _handle(
+                line, state, board, config, log, log_path, audit, suggestions
+            )
             if done:
                 break
         except (DraftStateError, ConfigError, KeyError, ValueError) as exc:
@@ -235,7 +255,7 @@ def cmd_draft(args) -> int:
     return 0
 
 
-def _handle(line, state, board, config, log, log_path, audit):
+def _handle(line, state, board, config, log, log_path, audit, suggestions=()):
     lower = line.lower()
     if lower in ("quit", "exit", "q"):
         return state, board, True
@@ -283,16 +303,26 @@ def _handle(line, state, board, config, log, log_path, audit):
     if lower.startswith("me "):
         mine, text = True, line[3:]
 
-    resolution = board.resolver.resolve(text)
-    if not resolution.found:
-        print(f"  ! {resolution.note}")
-        return state, board, False
-    if resolution.ambiguous:
-        print(f"  ! {resolution.note}")
-        print("    say which one - add the position (e.g. 'josh QB') or type the full name")
-        return state, board, False
-
-    player = resolution.best
+    # A bare number picks off the suggestion list. This is the whole point of
+    # the list: entering someone else's pick is the slowest thing you do in a
+    # live draft and the one place a typo silently corrupts the log.
+    if text.strip().isdigit() and suggestions:
+        choice = int(text.strip())
+        if not 1 <= choice <= len(suggestions):
+            print(f"  ! pick a number from 1 to {len(suggestions)}, or type a name")
+            return state, board, False
+        player = board.players[suggestions[choice - 1]]
+    else:
+        resolution = board.resolver.resolve(text)
+        if not resolution.found:
+            print(f"  ! {resolution.note}")
+            return state, board, False
+        if resolution.ambiguous:
+            print(f"  ! {resolution.note}")
+            print("    say which one - add the position (e.g. 'josh QB') "
+                  "or type the full name")
+            return state, board, False
+        player = resolution.best
     if player.player_id in state.drafted:
         print(f"  ! {player.display} was already taken at pick "
               f"{state.drafted.index(player.player_id) + 1}")
@@ -330,6 +360,34 @@ def _recommend_now(config, board, state, audit) -> None:
         print(f"  {rec.rank:<3}{rec.display[:27]:<28}{rec.vor:7.1f}{surv:>7}"
               f"{rec.p_title:10.2%}{rec.delta_p_title * 100:+8.2f}")
     print()
+
+
+def _show_suggestions(simulator, board, config, state, n) -> list[int]:
+    """Numbered shortlist of who the seat on the clock probably takes."""
+    drafted_idx = [board.idx(p) for p in state.drafted]
+    last_pos = (
+        int(board.pos_code[drafted_idx[-1]]) if drafted_idx else None
+    )
+    rows = simulator.likely_next_picks(
+        drafted_idx,
+        seat=state.on_the_clock,
+        n=n,
+        # Seeded off the pick number so the same state always shows the same
+        # list - you should not see the options reshuffle when you type `roster`.
+        seed=(config.sim.seed + state.pick_number) % (2**32),
+        last_pos_code=last_pos,
+        pick_number=state.pick_number,
+    )
+    if not rows:
+        return []
+    covered = sum(p for _, p in rows)
+    print(f"  likely for seat {state.on_the_clock} "
+          f"(type the number; {covered:.0%} of the time it is one of these)")
+    for k, (idx, prob) in enumerate(rows, start=1):
+        player = board.players[idx]
+        print(f"   {k:>2}  {player.name[:24]:<25}{player.pos:<4}{player.team:<4}"
+              f"{prob:>6.0%}")
+    return [idx for idx, _ in rows]
 
 
 def _show_log(board, state, config, count: int) -> None:
@@ -671,6 +729,10 @@ def build_parser() -> argparse.ArgumentParser:
     common(p)
     p.add_argument("--out", help="where to write the pick log")
     p.add_argument("--audit", help="where to write the audit log")
+    p.add_argument("--suggest", type=int, default=10,
+                   help="how many likely picks to list before each opponent pick")
+    p.add_argument("--no-suggest", action="store_true",
+                   help="turn the numbered list off")
     p.set_defaults(func=cmd_draft)
 
     p = sub.add_parser("llm", help="draft console driven by Claude (needs the llm extra)")
