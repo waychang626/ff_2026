@@ -364,7 +364,7 @@ Built and tested in a container with no R and no outbound access to the
 projection sources, so:
 
 **Verified** — the whole Python engine, end to end, against a synthetic board:
-202 tests, determinism, greedy-vs-brute-force lineups, the calibration
+205 tests, determinism, greedy-vs-brute-force lineups, the calibration
 arithmetic, the opponent model's herding, the endogenous variance appetite, both
 league configs, the replay harness and the backtester.
 
@@ -383,7 +383,7 @@ result.
 ## Testing
 
 ```bash
-python -m pytest              # 202 tests, ~45s
+python -m pytest              # 205 tests, ~45s
 python -m pytest tests/test_variance_appetite.py -v   # the §3.1 behaviour
 ```
 
@@ -523,4 +523,4 @@ with the brief's open-item verification.
 ### Initial build
 The engine end to end in the brief's build order: replay harness first, then
 projections, calibration, VOR, opponent model, Monte Carlo, `recommend_pick`,
-and the LLM layer last. 202 tests.
+and the LLM layer last. 205 tests.
