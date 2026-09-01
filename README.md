@@ -1,12 +1,8 @@
 # ffdraft — a draft assistant for season-long fantasy football
 
-The LLM orchestrates. A deterministic script decides.
+Hey Claude, help me win my fantasy leagues, make no mistakes
 
-During a live draft you type picks as they happen — yours and everyone else's —
-and the engine returns a ranked recommendation for the pick on the clock. Two
-leagues, one engine; everything league-specific lives in a config file written
-before the draft.
-
+output example:
 ```
 PICK: Bijan Robinson (RB, ATL)
 EDGE: +11.9 VOR over Jahmyr Gibbs (title odds tied)
