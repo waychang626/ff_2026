@@ -1043,6 +1043,25 @@ def cmd_lineup(args) -> int:
     except StaleDataError as exc:
         raise SystemExit(f"stale data: {exc}") from exc
 
+    if args.usage:
+        from .usage import (
+            apply_usage_adjustment, check_usage, format_trends, load_usage,
+            notable_trends,
+        )
+
+        usage = load_usage(args.usage, max_age_hours=args.usage_max_age_hours)
+        notes.extend(check_usage(usage, args.week or data.week))
+        trends = notable_trends(usage, roster, args.week or data.week)
+        print(format_trends(trends, board, args.week or data.week))
+        print()
+        if args.usage_adjust:
+            audit = AuditLog(args.audit) if args.audit else AuditLog()
+            notes.extend(apply_usage_adjustment(
+                data, usage, roster, args.week or data.week,
+                damping=args.usage_damping, cap=args.usage_cap,
+                league_id=config.league_id, audit=audit,
+            ))
+
     opponent_roster = None
     if args.opponent:
         if not 1 <= args.opponent <= config.teams:
@@ -1526,6 +1545,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help="print per-source coverage and age first")
     p.add_argument("--allow-stale", action="store_true",
                    help="override the freshness refusal, loudly")
+    p.add_argument("--usage",
+                   help="observed usage from scripts/fetch_nflverse.py; reports "
+                        "role changes the consensus may not have priced")
+    p.add_argument("--usage-adjust", action="store_true",
+                   help="also nudge projections toward observed usage "
+                        "(damped, capped, and written to the audit log)")
+    p.add_argument("--usage-damping", type=float, default=0.5,
+                   help="how much of the usage trend to apply; the consensus "
+                        "has already priced some of it")
+    p.add_argument("--usage-cap", type=float, default=0.25,
+                   help="largest multiplier the adjustment may apply")
+    p.add_argument("--usage-max-age-hours", type=float, default=72.0,
+                   help="nflverse publishes overnight, so this is looser than "
+                        "the projection bar")
+    p.add_argument("--audit", help="where to write the audit log")
     p.set_defaults(func=cmd_lineup)
 
     p = sub.add_parser("trades", help="post-draft trade ideas, ranked by your title odds")

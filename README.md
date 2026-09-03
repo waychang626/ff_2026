@@ -165,6 +165,19 @@ they read the seat from the config or the flag, not from the log header.
 `--weekly` takes either a points file or the stat lines the R pull writes; stat
 lines are scored with your league's rules before the sources are averaged.
 
+### Seeing a role change before the consensus prices it
+
+| You want to | Type this |
+|---|---|
+| Pull observed usage (snaps, targets, carries) | `python scripts/fetch_nflverse.py --season 2026` |
+| See role changes on your roster | add `--usage data/usage_2026.csv` to `ffdraft lineup` |
+| Also nudge projections toward usage | add `--usage-adjust` |
+| Change how hard it nudges | `--usage-damping 0.3`, `--usage-cap 0.15` |
+
+The projection pull tells you what the sites *forecast*. This tells you what
+actually happened. Flagging is the default; `--usage-adjust` is opt-in, damped,
+capped and written to the audit log.
+
 ### Trading, once the draft is over
 
 | You want to | Type this |
@@ -279,6 +292,7 @@ league.yaml ─► baselines (§3.2) ─► VOR + tiers ────────
 | `simulate.py` | Season Monte Carlo → P(weekly win), P(playoffs), P(title) |
 | `engine.py` | `recommend_pick` and the guards around it |
 | `weekly.py` | In-season lineups: multi-source weekly data, freshness, P(win) |
+| `usage.py` | Observed snap/target share, and the role changes it exposes |
 | `trades.py` | Post-draft trade search: surplus filter, then the season sim |
 | `replay.py` | Replay harness and backtester |
 | `audit.py` | `(state_hash, output, timestamp)` for every call |
@@ -526,7 +540,7 @@ Built and tested in a container with no R and no outbound access to the
 projection sources, so:
 
 **Verified** — the whole Python engine, end to end, against a synthetic board:
-289 tests, determinism, greedy-vs-brute-force lineups, the calibration
+306 tests, determinism, greedy-vs-brute-force lineups, the calibration
 arithmetic, the opponent model's herding, the endogenous variance appetite, both
 league configs, the replay harness and the backtester.
 
@@ -545,7 +559,7 @@ result.
 ## Testing
 
 ```bash
-python -m pytest              # 289 tests, ~2m
+python -m pytest              # 306 tests, ~2m10s
 python -m pytest tests/test_variance_appetite.py -v   # the §3.1 behaviour
 ```
 
@@ -659,6 +673,40 @@ seat still needs, and whether a run is on.
 `undo` only reaches the last pick, but the real mistake is noticing at pick 45
 that pick 40 went in as the wrong Josh. `fix` swaps one recorded pick and
 refuses anything that would corrupt the log.
+
+### `ffdraft usage`: what the projections forecast vs. what actually happened
+`R/pull_projections.R --week N` returns each site's *forecast*. That already
+reflects public injury news — when a starter is ruled out, every site moves the
+backup within hours, because that is what they are paid to do. So the
+"starter goes down, backup steps in" case is covered, provided the pull is
+fresh.
+
+What it cannot cover is a role changing without an announcement. A third-string
+back takes 22% of snaps in week 4, 44% in week 5, 61% in week 6, and nobody
+says anything. Each site is averaging its own history too, so the consensus
+anchors on the August depth chart and re-rates over weeks. That lag is the only
+edge here, and the projection scrape contains *no observed data at all* — every
+column in its `stat_cols` list is a forecast.
+
+`scripts/fetch_nflverse.py` closes that: snap share, target share, carries and
+results per player-week from [nflverse](https://github.com/nflverse/nflverse-data),
+free, no auth, updated nightly. The metric is usage rather than points on
+purpose — usage is stickier week to week. A back who posts RB1 numbers on 30% of
+snaps had a good afternoon; a back on 70% of snaps has a job.
+
+Run against real 2024 data it finds the season's actual takeovers, both sides of
+the same backfield: Tank Bigsby 28%→62% while Travis Etienne went 66%→29%;
+Tyrone Tracy 41%→65% while Devin Singletary went 71%→29%. Role *loss* is
+flagged as loudly as role gain, because a starter losing his job is the same
+signal reversed and the half people forget to check.
+
+Two deliberate limits. It does not replace the projection: the sites see snap
+counts too, and a naive trend model overriding a professional consensus is how
+you get worse. The default output is a flag next to the number, for a human.
+And when `--usage-adjust` is asked for, the move is damped (the consensus has
+priced part of any trend; applying it in full double-counts) and capped at 25%
+(one anomalous week should not swing a lineup), with every adjustment written to
+the audit log beside the usage that caused it.
 
 ### `ffdraft lineup`: the in-season half, where staleness is the enemy
 The draft engine answers a season-long question. A week-9 lineup is a different
@@ -782,4 +830,4 @@ with the brief's open-item verification.
 ### Initial build
 The engine end to end in the brief's build order: replay harness first, then
 projections, calibration, VOR, opponent model, Monte Carlo, `recommend_pick`,
-and the LLM layer last. 289 tests.
+and the LLM layer last. 306 tests.

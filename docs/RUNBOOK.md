@@ -385,6 +385,29 @@ player over the steady one, because losing by less is still losing.
 If it refuses and you disagree, `--allow-stale` proceeds and prints exactly what
 it overrode.
 
+### Role changes — the thing projections are slowest on
+
+```bash
+python scripts/fetch_nflverse.py --season 2026        # weekly, after the games
+ffdraft lineup --league league2 --log logs/draft_league2.jsonl \
+    --weekly data/weekly_2026_w07.csv --week 7 --usage data/usage_2026.csv
+```
+
+Projections already handle injuries — the sites move a backup within hours of
+the news. What they are slow on is a role changing quietly: a back going 22% →
+44% → 61% of snaps with no announcement. This prints those, in both directions:
+
+```
+  role changes going into week 7
+   UP   Bucky Irving (RB, TB)      snaps 24% -> 62% over the last 2, targets 4% -> 9%
+   DOWN Rachaad White (RB, TB)     snaps 71% -> 30% over the last 2, targets 13% -> 8%
+```
+
+Read it and decide. `--usage-adjust` will nudge the projections for you, damped
+and capped at 25%, but the default is to show you the number and leave the call
+alone — the sites can see snap counts too, and you are not the only one who
+noticed.
+
 ---
 
 ## 3. Reading the output
