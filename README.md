@@ -149,6 +149,22 @@ they read the seat from the config or the flag, not from the log header.
 `--actuals` is a CSV of realised season totals: either a `player_id` column, or
 `player` and `pos` columns, plus `points`.
 
+### Setting a lineup during the season
+
+| You want to | Type this |
+|---|---|
+| Pull this week's projections | `Rscript R/pull_projections.R --season 2026 --week 3` |
+| Make a synthetic week to try it | `python scripts/make_weekly_sample.py --week 1` |
+| Set the lineup | `ffdraft lineup --league <id> --log <log> --weekly <file> --week 3` |
+| Optimise for beating one opponent | add `--opponent 5` |
+| See which sources survived, and their age | add `--sources` |
+| Insist on a multi-source consensus | add `--min-sources 3` |
+| Tighten or loosen the freshness bar | `--max-age-hours 12`, `--active-max-age-hours 1` |
+| Use data the tool refuses | `--allow-stale` (it prints what it is overriding) |
+
+`--weekly` takes either a points file or the stat lines the R pull writes; stat
+lines are scored with your league's rules before the sources are averaged.
+
 ### Trading, once the draft is over
 
 | You want to | Type this |
@@ -262,6 +278,7 @@ league.yaml ─► baselines (§3.2) ─► VOR + tiers ────────
 | `opponents.py` | §3.4 opponent model and the draft rollout |
 | `simulate.py` | Season Monte Carlo → P(weekly win), P(playoffs), P(title) |
 | `engine.py` | `recommend_pick` and the guards around it |
+| `weekly.py` | In-season lineups: multi-source weekly data, freshness, P(win) |
 | `trades.py` | Post-draft trade search: surplus filter, then the season sim |
 | `replay.py` | Replay harness and backtester |
 | `audit.py` | `(state_hash, output, timestamp)` for every call |
@@ -509,7 +526,7 @@ Built and tested in a container with no R and no outbound access to the
 projection sources, so:
 
 **Verified** — the whole Python engine, end to end, against a synthetic board:
-263 tests, determinism, greedy-vs-brute-force lineups, the calibration
+289 tests, determinism, greedy-vs-brute-force lineups, the calibration
 arithmetic, the opponent model's herding, the endogenous variance appetite, both
 league configs, the replay harness and the backtester.
 
@@ -528,7 +545,7 @@ result.
 ## Testing
 
 ```bash
-python -m pytest              # 263 tests, ~95s
+python -m pytest              # 289 tests, ~2m
 python -m pytest tests/test_variance_appetite.py -v   # the §3.1 behaviour
 ```
 
@@ -643,6 +660,45 @@ seat still needs, and whether a run is on.
 that pick 40 went in as the wrong Josh. `fix` swaps one recorded pick and
 refuses anything that would corrupt the log.
 
+### `ffdraft lineup`: the in-season half, where staleness is the enemy
+The draft engine answers a season-long question. A week-9 lineup is a different
+question and almost nothing survives from the draft board: it does not know who
+is on a bye, who tore something on Thursday, or who draws the worst run defence
+in the league. Starting the draft board in November is starting a number that
+was true in August.
+
+**Staleness is a refusal, not a warning.** A warning above a lineup gets read
+after the lineup, which is to say never, and the failure it guards against is
+silent and total — last week's file parses cleanly, produces a confident lineup,
+and starts a player who was ruled out on Friday. Nothing in the output looks
+wrong, because every number in it is internally consistent. Three rules,
+escalating: the file's week must be the week you asked for; it must be inside
+`--max-age-hours` (default 24, because practice reports land Wednesday through
+Friday); and if anyone you could start is QUESTIONABLE or DOUBTFUL the bar drops
+to three hours, because those tags resolve in the ninety minutes before kickoff
+and that is the highest-value information in the week. `--allow-stale` exists
+for people who know better, and prints what it overrode.
+
+**Sources are averaged equal-weight, and their disagreement is kept.** The same
+rule the draft board uses, for a reason with a name: the *forecast combination
+puzzle* (Stock and Watson 2004; Smith and Wallis 2009) is the durable finding
+that a flat average beats weights estimated from past accuracy, because
+estimating the weights adds more variance than the bias it removes — and it
+bites hardest when the history is short, which a fantasy week is. Weighting
+sources by how they did last week is precisely the documented mistake. What the
+aggregation buys is the *spread*: `_weekly_sd` adds cross-source disagreement in
+quadrature with the league's weekly CV, so five sources clustered inside two
+points is a different bet from five spread over fifteen. A stale source is
+dropped rather than averaged in, and `--sources` shows what survived.
+
+**With `--opponent`, the objective changes.** Expected points and P(win) are not
+the same lineup: facing a team projected forty points clear of you, the
+high-floor start is the one that loses by less, and you want the volatile one
+that might spike; facing a team you outclass, variance is the enemy. Same
+endogenous risk appetite the draft engine gets from maximising P(title), one
+week wide. It searches the base lineup plus every single legal swap, which is
+the decision a person actually faces on Sunday morning.
+
 ### Fix: the shortlist collapsed in the rounds it was needed most
 Reported from a live practice draft: by round 10 the likely-pick list was
 showing one or two names instead of ten. `likely_next_picks` built its list from
@@ -726,4 +782,4 @@ with the brief's open-item verification.
 ### Initial build
 The engine end to end in the brief's build order: replay harness first, then
 projections, calibration, VOR, opponent model, Monte Carlo, `recommend_pick`,
-and the LLM layer last. 263 tests.
+and the LLM layer last. 289 tests.

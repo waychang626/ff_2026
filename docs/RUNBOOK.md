@@ -357,6 +357,36 @@ to straight one-for-ones, which are far easier to get agreed.
 
 ---
 
+## 2.6 During the season — setting a lineup
+
+```bash
+Rscript R/pull_projections.R --season 2026 --week 3      # pull, every week
+ffdraft lineup --league league2 --log logs/draft_league2.jsonl \
+    --weekly data/weekly_2026_w03.csv --week 3 --opponent 5 --sources
+```
+
+**Pull it the morning you set the lineup, not the night before.** The tool
+refuses data older than 24 hours, and refuses anything older than 3 hours when
+one of your players is QUESTIONABLE or DOUBTFUL — those tags resolve about 90
+minutes before kickoff and are the most valuable thing you will learn all week.
+The refusal is deliberate: a warning printed above a lineup gets read after the
+lineup.
+
+`--sources` shows which sources survived and how old each is. A source past the
+limit is dropped rather than averaged in, so a five-source consensus can quietly
+become a two-source one — this is how you see that. `--min-sources 3` makes it
+an error instead.
+
+`--opponent <seat>` changes what "best" means: without it the lineup maximises
+projected points, with it it maximises your chance of beating that specific
+team. Those differ. Against a much stronger opponent it will start the volatile
+player over the steady one, because losing by less is still losing.
+
+If it refuses and you disagree, `--allow-stale` proceeds and prints exactly what
+it overrode.
+
+---
+
 ## 3. Reading the output
 
 ```

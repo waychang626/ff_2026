@@ -1004,6 +1004,65 @@ def _finish(board, state, config, log, log_path, stopped: bool) -> None:
 
 
 
+def cmd_lineup(args) -> int:
+    """Set this week's lineup from fresh, multi-source weekly data."""
+    from .replay import DraftLog
+    from .weekly import (
+        StaleDataError, best_lineup, check_freshness, format_plan,
+        format_sources, load_weekly, roster_for,
+    )
+
+    config, board = _load(args)
+    log = DraftLog.load(args.log)
+    seat = args.seat or config.my_seat or log.my_seat
+    if seat is None:
+        raise SystemExit(
+            "cannot tell which seat is yours: pass --seat, or set draft.my_seat"
+        )
+
+    try:
+        data = load_weekly(
+            args.weekly, week=args.week, rules=config.scoring,
+            max_age_hours=args.max_age_hours,
+            min_sources=args.min_sources,
+        )
+    except StaleDataError as exc:
+        raise SystemExit(f"stale data: {exc}") from exc
+
+    roster = roster_for(config, log.player_ids, seat)
+    if args.sources:
+        print(format_sources(data))
+        print()
+    try:
+        notes = check_freshness(
+            data, args.week or data.week, roster,
+            max_age_hours=args.max_age_hours,
+            active_max_age_hours=args.active_max_age_hours,
+            allow_stale=args.allow_stale,
+        )
+    except StaleDataError as exc:
+        raise SystemExit(f"stale data: {exc}") from exc
+
+    opponent_roster = None
+    if args.opponent:
+        if not 1 <= args.opponent <= config.teams:
+            raise SystemExit(
+                f"seat {args.opponent} does not exist; this league has "
+                f"{config.teams} seats"
+            )
+        opponent_roster = roster_for(config, log.player_ids, args.opponent)
+
+    plan = best_lineup(
+        config, board, data, roster,
+        opponent_roster=opponent_roster,
+        opponent_seat=args.opponent,
+        n_sims=args.sims or 20000,
+        notes=notes,
+    )
+    print(format_plan(plan, board, data))
+    return 0
+
+
 def cmd_trades(args) -> int:
     """Post-draft trade search. The draft is over; this is the next lever."""
     from .replay import DraftLog
@@ -1446,6 +1505,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", help="where to write the mock pick log")
     p.add_argument("--audit", help="where to write the audit log")
     p.set_defaults(func=cmd_mock)
+
+    p = sub.add_parser("lineup", help="set this week's lineup from fresh weekly data")
+    common(p)
+    p.add_argument("--log", required=True, help="the pick log from the draft")
+    p.add_argument("--weekly", required=True,
+                   help="this week's projections (multi-source CSV)")
+    p.add_argument("--week", type=int, help="the week you are setting")
+    p.add_argument("--opponent", type=int,
+                   help="the seat you play this week; switches the objective "
+                        "from expected points to P(win)")
+    p.add_argument("--max-age-hours", type=float, default=24.0,
+                   help="a source older than this is dropped")
+    p.add_argument("--active-max-age-hours", type=float, default=3.0,
+                   help="tighter limit when a player you could start is "
+                        "questionable or doubtful")
+    p.add_argument("--min-sources", type=int, default=1,
+                   help="refuse if fewer than this many sources survive")
+    p.add_argument("--sources", action="store_true",
+                   help="print per-source coverage and age first")
+    p.add_argument("--allow-stale", action="store_true",
+                   help="override the freshness refusal, loudly")
+    p.set_defaults(func=cmd_lineup)
 
     p = sub.add_parser("trades", help="post-draft trade ideas, ranked by your title odds")
     common(p)
