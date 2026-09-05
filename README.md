@@ -45,6 +45,67 @@ Every action, by the thing you are trying to do. `<id>` is a league id from
 which you can also set once as `draft.my_seat` in the league config and then
 leave off every command below.
 
+The draft is the short part of the season. In-season comes first here —
+trades, lineups, role changes — then the draft-day sections below it.
+
+### Trading, once the draft is over
+
+| You want to | Type this |
+|---|---|
+| Find trades worth proposing | `ffdraft trades --league <id> --log logs/draft_<id>.jsonl` |
+| See who is long and short at each position | add `--surplus` |
+| Only look at one owner | add `--partner 5` |
+| Only 1-for-1 offers | add `--max-give 1 --max-get 1` |
+| Insist the other side gains more | add `--min-their-gain 20` |
+| See more ideas | add `--top 10` |
+
+This one reads your seat out of the log header, so `--seat` is optional.
+
+### Setting a lineup during the season
+
+| You want to | Type this |
+|---|---|
+| Pull this week's projections | `Rscript R/pull_projections.R --season 2026 --week 3` |
+| Make a synthetic week to try it | `python scripts/make_weekly_sample.py --week 1` |
+| Set the lineup | `ffdraft lineup --league <id> --log <log> --weekly <file> --week 3` |
+| Optimise for beating one opponent | add `--opponent 5` |
+| See which sources survived, and their age | add `--sources` |
+| Insist on a multi-source consensus | add `--min-sources 3` |
+| Tighten or loosen the freshness bar | `--max-age-hours 12`, `--active-max-age-hours 1` |
+| Use data the tool refuses | `--allow-stale` (it prints what it is overriding) |
+
+`--weekly` takes either a points file or the stat lines the R pull writes; stat
+lines are scored with your league's rules before the sources are averaged.
+
+### Seeing a role change before the consensus prices it
+
+| You want to | Type this |
+|---|---|
+| Pull observed usage (snaps, targets, carries) | `python scripts/fetch_nflverse.py --season 2026` |
+| See role changes on your roster | add `--usage data/usage_2026.csv` to `ffdraft lineup` |
+| Also nudge projections toward usage | add `--usage-adjust` |
+| Change how hard it nudges | `--usage-damping 0.3`, `--usage-cap 0.15` |
+
+The projection pull tells you what the sites *forecast*. This tells you what
+actually happened. Flagging is the default; `--usage-adjust` is opt-in, damped,
+capped and written to the audit log.
+
+### After the draft
+
+| You want to | Type this |
+|---|---|
+| Re-run your draft through the engine | `ffdraft replay --league <id> --seat <n> --log logs/draft_<id>.jsonl` |
+| Only replay the first few picks | add `--limit 5` |
+| Prove the engine is deterministic | `ffdraft replay --league <id> --seat <n> --log <path> --check` |
+| Check determinism harder | add `--runs 5` |
+| Score how the engine would have drafted | `ffdraft backtest --league <id> --seat <n> --log <path> --actuals <path>` |
+
+`replay` and `backtest` need `--seat` even though the pick log records it —
+they read the seat from the config or the flag, not from the log header.
+
+`--actuals` is a CSV of realised season totals: either a `player_id` column, or
+`player` and `pos` columns, plus `points`.
+
 ### Setting up, before draft day
 
 | You want to | Type this |
@@ -104,6 +165,8 @@ These are identical in `ffdraft draft` and `ffdraft mock`.
 | Get the recommendation again | `go` (also `rec` or `.`) |
 | Take back the last pick | `undo` |
 | Fix a pick you got wrong four picks ago | `log` to find the number, then `fix 40 josh allen` |
+| **Add a pick you missed entirely** | `insert 40 josh allen` — everything after shifts down |
+| Remove a pick that never happened | `drop 40` — everything after shifts up |
 | Tell the engine someone is out for the year | `out james cook : ACL, ruled out` |
 | Tell it someone is dinged but playing | `bump james cook 0.75 : limited all week` |
 | Write the pick log right now | `save` |
@@ -130,35 +193,6 @@ an unexplained edit to the board is indistinguishable from a typo a week later.
 
 Every console command in the table above works here too. That is deliberate —
 a command you reach for under a clock should be one you have already used.
-
-### After the draft
-
-| You want to | Type this |
-|---|---|
-| Re-run your draft through the engine | `ffdraft replay --league <id> --seat <n> --log logs/draft_<id>.jsonl` |
-| Only replay the first few picks | add `--limit 5` |
-| Prove the engine is deterministic | `ffdraft replay --league <id> --seat <n> --log <path> --check` |
-| Check determinism harder | add `--runs 5` |
-| Score how the engine would have drafted | `ffdraft backtest --league <id> --seat <n> --log <path> --actuals <path>` |
-
-`replay` and `backtest` need `--seat` even though the pick log records it —
-they read the seat from the config or the flag, not from the log header.
-
-`--actuals` is a CSV of realised season totals: either a `player_id` column, or
-`player` and `pos` columns, plus `points`.
-
-### Trading, once the draft is over
-
-| You want to | Type this |
-|---|---|
-| Find trades worth proposing | `ffdraft trades --league <id> --log logs/draft_<id>.jsonl` |
-| See who is long and short at each position | add `--surplus` |
-| Only look at one owner | add `--partner 5` |
-| Only 1-for-1 offers | add `--max-give 1 --max-get 1` |
-| Insist the other side gains more | add `--min-their-gain 20` |
-| See more ideas | add `--top 10` |
-
-This one reads your seat out of the log header, so `--seat` is optional.
 
 ### Flags that work on almost every command
 
@@ -260,6 +294,8 @@ league.yaml ─► baselines (§3.2) ─► VOR + tiers ────────
 | `opponents.py` | §3.4 opponent model and the draft rollout |
 | `simulate.py` | Season Monte Carlo → P(weekly win), P(playoffs), P(title) |
 | `engine.py` | `recommend_pick` and the guards around it |
+| `weekly.py` | In-season lineups: multi-source weekly data, freshness, P(win) |
+| `usage.py` | Observed snap/target share, and the role changes it exposes |
 | `trades.py` | Post-draft trade search: surplus filter, then the season sim |
 | `replay.py` | Replay harness and backtester |
 | `audit.py` | `(state_hash, output, timestamp)` for every call |
@@ -507,7 +543,7 @@ Built and tested in a container with no R and no outbound access to the
 projection sources, so:
 
 **Verified** — the whole Python engine, end to end, against a synthetic board:
-234 tests, determinism, greedy-vs-brute-force lineups, the calibration
+306 tests, determinism, greedy-vs-brute-force lineups, the calibration
 arithmetic, the opponent model's herding, the endogenous variance appetite, both
 league configs, the replay harness and the backtester.
 
@@ -526,7 +562,7 @@ result.
 ## Testing
 
 ```bash
-python -m pytest              # 234 tests, ~95s
+python -m pytest              # 306 tests, ~2m10s
 python -m pytest tests/test_variance_appetite.py -v   # the §3.1 behaviour
 ```
 
@@ -545,6 +581,147 @@ See `docs/research-map.md` for where each research finding lives in the code.
 ## Changelog
 
 Newest first. Every push updates this section.
+
+### `ffdraft usage`: what the projections forecast vs. what actually happened
+`R/pull_projections.R --week N` returns each site's *forecast*. That already
+reflects public injury news — when a starter is ruled out, every site moves the
+backup within hours, because that is what they are paid to do. So the
+"starter goes down, backup steps in" case is covered, provided the pull is
+fresh.
+
+What it cannot cover is a role changing without an announcement. A third-string
+back takes 22% of snaps in week 4, 44% in week 5, 61% in week 6, and nobody
+says anything. Each site is averaging its own history too, so the consensus
+anchors on the August depth chart and re-rates over weeks. That lag is the only
+edge here, and the projection scrape contains *no observed data at all* — every
+column in its `stat_cols` list is a forecast.
+
+`scripts/fetch_nflverse.py` closes that: snap share, target share, carries and
+results per player-week from [nflverse](https://github.com/nflverse/nflverse-data),
+free, no auth, updated nightly. The metric is usage rather than points on
+purpose — usage is stickier week to week. A back who posts RB1 numbers on 30% of
+snaps had a good afternoon; a back on 70% of snaps has a job.
+
+Run against real 2024 data it finds the season's actual takeovers, both sides of
+the same backfield: Tank Bigsby 28%→62% while Travis Etienne went 66%→29%;
+Tyrone Tracy 41%→65% while Devin Singletary went 71%→29%. Role *loss* is
+flagged as loudly as role gain, because a starter losing his job is the same
+signal reversed and the half people forget to check.
+
+Two deliberate limits. It does not replace the projection: the sites see snap
+counts too, and a naive trend model overriding a professional consensus is how
+you get worse. The default output is a flag next to the number, for a human.
+And when `--usage-adjust` is asked for, the move is damped (the consensus has
+priced part of any trend; applying it in full double-counts) and capped at 25%
+(one anomalous week should not swing a lineup), with every adjustment written to
+the audit log beside the usage that caused it.
+
+### `ffdraft lineup`: the in-season half, where staleness is the enemy
+The draft engine answers a season-long question. A week-9 lineup is a different
+question and almost nothing survives from the draft board: it does not know who
+is on a bye, who tore something on Thursday, or who draws the worst run defence
+in the league. Starting the draft board in November is starting a number that
+was true in August.
+
+**Staleness is a refusal, not a warning.** A warning above a lineup gets read
+after the lineup, which is to say never, and the failure it guards against is
+silent and total — last week's file parses cleanly, produces a confident lineup,
+and starts a player who was ruled out on Friday. Nothing in the output looks
+wrong, because every number in it is internally consistent. Three rules,
+escalating: the file's week must be the week you asked for; it must be inside
+`--max-age-hours` (default 24, because practice reports land Wednesday through
+Friday); and if anyone you could start is QUESTIONABLE or DOUBTFUL the bar drops
+to three hours, because those tags resolve in the ninety minutes before kickoff
+and that is the highest-value information in the week. `--allow-stale` exists
+for people who know better, and prints what it overrode.
+
+**Sources are averaged equal-weight, and their disagreement is kept.** The same
+rule the draft board uses, for a reason with a name: the *forecast combination
+puzzle* (Stock and Watson 2004; Smith and Wallis 2009) is the durable finding
+that a flat average beats weights estimated from past accuracy, because
+estimating the weights adds more variance than the bias it removes — and it
+bites hardest when the history is short, which a fantasy week is. Weighting
+sources by how they did last week is precisely the documented mistake. What the
+aggregation buys is the *spread*: `_weekly_sd` adds cross-source disagreement in
+quadrature with the league's weekly CV, so five sources clustered inside two
+points is a different bet from five spread over fifteen. A stale source is
+dropped rather than averaged in, and `--sources` shows what survived.
+
+**With `--opponent`, the objective changes.** Expected points and P(win) are not
+the same lineup: facing a team projected forty points clear of you, the
+high-floor start is the one that loses by less, and you want the volatile one
+that might spike; facing a team you outclass, variance is the enemy. Same
+endogenous risk appetite the draft engine gets from maximising P(title), one
+week wide. It searches the base lineup plus every single legal swap, which is
+the decision a person actually faces on Sunday morning.
+
+### `ffdraft trades`: what to offer, to whom, and why they would accept
+A trade creates value out of positional imbalance, not out of one side being
+fooled: your RB4 scores you nothing on Sunday, and the WR-heavy owner has the
+mirror-image problem. The search is therefore a surplus search, run in the two
+stages `engine.py` already uses — a cheap filter, then the expensive truth.
+
+Stage 1 recomputes both teams' optimal starting lineups on point estimates for
+every candidate trade (~164k on an eight-team board, under a second, because it
+is the `lineup.py` primitive vectorised over candidates) and keeps only those
+that raise *both*. Stage 2 runs the season Monte Carlo on the survivors and
+reports the change in your P(title), on common random numbers so the differences
+between trades are differences in the trades.
+
+Stage 2 is where bye weeks and depth get priced: `draw_season` zeroes a player's
+bye outright, so a trade that stacks three receivers into week 11 shows up as
+lower title odds without anything special being done about it. Because a number
+moving by half a point does not *say* what went wrong, every finalist is also
+profiled week by week and a trade that deepens your worst week is flagged in
+words.
+
+Two things it refuses to pretend. Uneven trades force a cut, so a 1-for-2 is not
+a free extra player. And the other owner does not run a lineup optimiser — they
+value players by name and draft position — so every idea carries the ADP gap
+next to the projection gap, and asking for the earlier-drafted name is labelled
+a hard sell however good the arithmetic is.
+
+### Fix: the shortlist collapsed in the rounds it was needed most
+Reported from a live practice draft: by round 10 the likely-pick list was
+showing one or two names instead of ten. `likely_next_picks` built its list from
+`np.unique(argmin)`, which only returns players who *won* a simulation. When one
+faller's ADP sits far enough ahead of everyone left he wins all 4,000 draws, so
+`unique` returns a single row — and the list that exists to save you typing
+disappeared exactly where the board is widest and you least remember who is
+left. Now ranked by simulated probability and backfilled in ADP order, so it is
+always as long as asked for while that many players remain legal. A name the
+console is actively offering also no longer prints as `0%`, which read as a
+broken list; below the simulation's resolution it says `<1%`.
+
+### `insert` and `drop`: repair a log that lost its place
+`fix` handles the wrong player at the right pick. A pick you never entered is a
+different failure: every later pick is recorded one slot early, and because the
+seat that owns a pick is derived from its number, the whole tail is attributed
+to the wrong teams — wrong rosters, wrong replacement level, wrong
+recommendations. `undo` can only reach that by discarding the correct picks
+after it. `insert 40 josh allen` slots the missing pick in and shifts the tail
+back into alignment; `drop 40` is the mirror, for a pick entered twice. Both
+renumber the saved log and refuse anything that would duplicate a player or push
+a pick past the end of the draft.
+
+### Fix: every mock draft overwrote the last one's log
+`mock` wrote to `logs/mock_<league>.jsonl` on every run, so a rehearsal you
+wanted to compare against was already gone. Each run now gets its own
+timestamped file — with a counter, because two mocks started inside the same
+second collided and the test caught it. The live console keeps its stable
+filename, since that is where the runbook says to look, but no longer truncates
+an existing log: a pick log is the only record of the room and cannot be rebuilt
+afterwards, so a previous one is moved aside and the console says where it went.
+
+### One console surface, so practice matches draft day
+`mock` accepted a strict subset of the live console: no `log`, no `undo`, no
+`fix`, `roster` with no seat argument, and a bare `2` resolved as a *player
+name* rather than taking the engine's second choice. A rehearsal that teaches
+commands the real thing does not have is worse than no rehearsal. Both consoles
+now dispatch through one `_shared_command`, so the vocabularies cannot drift; a
+parity test drives every verb through both. Also fixes `startswith("log")`
+matching a pick for Logan, and `roster 99` reporting an empty seat instead of
+saying the seat does not exist.
 
 ### Fix: the shortlist was over-drafting quarterbacks
 Reported from a superflex mock that kept recommending back-to-back QBs. The
@@ -641,42 +818,6 @@ seat still needs, and whether a run is on.
 that pick 40 went in as the wrong Josh. `fix` swaps one recorded pick and
 refuses anything that would corrupt the log.
 
-### `ffdraft trades`: what to offer, to whom, and why they would accept
-A trade creates value out of positional imbalance, not out of one side being
-fooled: your RB4 scores you nothing on Sunday, and the WR-heavy owner has the
-mirror-image problem. The search is therefore a surplus search, run in the two
-stages `engine.py` already uses — a cheap filter, then the expensive truth.
-
-Stage 1 recomputes both teams' optimal starting lineups on point estimates for
-every candidate trade (~164k on an eight-team board, under a second, because it
-is the `lineup.py` primitive vectorised over candidates) and keeps only those
-that raise *both*. Stage 2 runs the season Monte Carlo on the survivors and
-reports the change in your P(title), on common random numbers so the differences
-between trades are differences in the trades.
-
-Stage 2 is where bye weeks and depth get priced: `draw_season` zeroes a player's
-bye outright, so a trade that stacks three receivers into week 11 shows up as
-lower title odds without anything special being done about it. Because a number
-moving by half a point does not *say* what went wrong, every finalist is also
-profiled week by week and a trade that deepens your worst week is flagged in
-words.
-
-Two things it refuses to pretend. Uneven trades force a cut, so a 1-for-2 is not
-a free extra player. And the other owner does not run a lineup optimiser — they
-value players by name and draft position — so every idea carries the ADP gap
-next to the projection gap, and asking for the earlier-drafted name is labelled
-a hard sell however good the arithmetic is.
-
-### One console surface, so practice matches draft day
-`mock` accepted a strict subset of the live console: no `log`, no `undo`, no
-`fix`, `roster` with no seat argument, and a bare `2` resolved as a *player
-name* rather than taking the engine's second choice. A rehearsal that teaches
-commands the real thing does not have is worse than no rehearsal. Both consoles
-now dispatch through one `_shared_command`, so the vocabularies cannot drift; a
-parity test drives every verb through both. Also fixes `startswith("log")`
-matching a pick for Logan, and `roster 99` reporting an empty seat instead of
-saying the seat does not exist.
-
 ### Mock draft mode; fix a K/DST over-draft it exposed
 `ffdraft mock` fills every other seat from the opponent model. Running it
 immediately showed the engine filling its whole bench with kickers and
@@ -692,4 +833,4 @@ with the brief's open-item verification.
 ### Initial build
 The engine end to end in the brief's build order: replay harness first, then
 projections, calibration, VOR, opponent model, Monte Carlo, `recommend_pick`,
-and the LLM layer last. 234 tests.
+and the LLM layer last. 306 tests.

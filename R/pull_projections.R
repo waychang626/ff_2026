@@ -14,6 +14,16 @@
 # Usage:
 #   Rscript R/pull_projections.R --season 2026 --out data/projections_2026.csv
 #
+# Weekly, for `ffdraft lineup` (week 0 is the season-long pull above):
+#   Rscript R/pull_projections.R --season 2026 --week 3 \
+#       --out data/weekly_2026_w03.csv
+#
+# The weekly file carries `source`, `week` and `fetched_at` columns, which is
+# what lets ffdraft average the sources equal-weight and drop any one of them
+# that is too old to trust. NOT RUN in the container this was written in - no R
+# and no outbound access to the scrape targets - so treat the first weekly pull
+# as something to eyeball before you rely on it.
+#
 # Setup (R >= 4.1):
 #   install.packages(c("remotes","data.table","readxl","httr2","rvest",
 #                      "purrr","tidyr","dplyr","rrapply","readr"))
@@ -33,7 +43,10 @@ get_arg <- function(flag, default) {
 }
 
 season   <- as.integer(get_arg("--season", "2026"))
-out_path <- get_arg("--out", sprintf("data/projections_%d.csv", season))
+week     <- as.integer(get_arg("--week", "0"))   # 0 = season-long
+out_path <- get_arg("--out", if (week > 0)
+  sprintf("data/weekly_%d_w%02d.csv", season, week)
+  else sprintf("data/projections_%d.csv", season))
 adp_path <- get_arg("--adp-out", sprintf("data/market_%d.csv", season))
 
 # Sources are internally rate-limited to about 2s/page, so a full pull takes
@@ -58,7 +71,7 @@ positions <- c("QB", "RB", "WR", "TE", "K", "DST")
 message(sprintf("scraping %d sources x %d positions for season %d ...",
                 length(sources), length(positions), season))
 
-raw <- scrape_data(src = sources, pos = positions, season = season, week = 0)  # week 0 = full season
+raw <- scrape_data(src = sources, pos = positions, season = season, week = week)
 
 # Stat columns the Python engine understands. Anything else is dropped here
 # rather than silently scored as zero downstream - `ffdraft.projections`
@@ -116,6 +129,17 @@ if (nrow(long) == 0) stop("scrape returned no rows - check connectivity and ffan
 
 # A defense's "name" varies wildly by source; the Python resolver keys team
 # defenses off nicknames, so keep whatever the source gave and let it match.
+
+# Stamp every row with the week and the moment of the pull. Repeated per row on
+# purpose: `ffdraft lineup` refuses to set a lineup from data it cannot date,
+# and a stamp in a sidecar file or a filename is a stamp that gets separated
+# from its data by the first copy or rename. One scrape is one instant, so the
+# value is constant down the column and the loader checks that it is.
+if (week > 0) {
+  long$week <- week
+  long$fetched_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z", tz = "UTC")
+}
+
 dir.create(dirname(out_path), showWarnings = FALSE, recursive = TRUE)
 write_csv(long, out_path)
 message(sprintf("wrote %s: %d rows, %d players, %d sources",

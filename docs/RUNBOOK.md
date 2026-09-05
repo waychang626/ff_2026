@@ -165,6 +165,8 @@ don't have to ask for it.
 | `undo` | Take back the last pick |
 | `log` / `log 20` | Recent picks **with their numbers** |
 | `fix 40 josh allen` | Correct pick 40, leaving every other pick alone |
+| `insert 40 josh allen` | Add a pick you missed at 40; everything after shifts down |
+| `drop 40` | Remove a pick that never happened; everything after shifts up |
 | `roster` / `roster 3` | Show your roster / seat 3's roster |
 | `board` / `board RB` | Best available overall / at a position |
 | `out <name> : <reason>` | Rule a player out for the season |
@@ -193,10 +195,24 @@ It refuses to create a duplicate, refuses a pick number that isn't in the log,
 and records what it changed in the pick log. Everything downstream —
 replacement level, survival, your roster — recomputes from the corrected state.
 
-If a player was entered who was never actually drafted, `fix` him to whoever
-really went there. There is no "delete a pick" — the pick happened, someone got
-picked, and a log with a hole in it would put every later pick on the wrong
-seat.
+### A pick you missed entirely
+
+`fix` swaps a player at a pick that exists. If a pick never got entered at all,
+the count itself is wrong: every later pick sits one slot early, and since the
+seat that owns a pick comes from its number, the whole tail is on the wrong
+team. That is what `insert` is for.
+
+```
+log                      # find where the gap is
+insert 40 josh allen     # everything from 40 on shifts down one
+```
+
+`drop 40` is the mirror, for a pick that got entered twice. Both rewrite the
+pick numbers and seats in the saved log, and both refuse a change that would
+duplicate a player or push a pick past the end of the draft.
+
+The symptom that sends you here is usually `! pick count mismatch`, or a
+`roster <seat>` that has someone else's player in it.
 
 ### Numbers work on your own pick too
 
@@ -338,6 +354,59 @@ so rather than letting you find out.
 
 `--partner 5` narrows it to one owner. `--max-give 1 --max-get 1` restricts it
 to straight one-for-ones, which are far easier to get agreed.
+
+---
+
+## 2.6 During the season — setting a lineup
+
+```bash
+Rscript R/pull_projections.R --season 2026 --week 3      # pull, every week
+ffdraft lineup --league league2 --log logs/draft_league2.jsonl \
+    --weekly data/weekly_2026_w03.csv --week 3 --opponent 5 --sources
+```
+
+**Pull it the morning you set the lineup, not the night before.** The tool
+refuses data older than 24 hours, and refuses anything older than 3 hours when
+one of your players is QUESTIONABLE or DOUBTFUL — those tags resolve about 90
+minutes before kickoff and are the most valuable thing you will learn all week.
+The refusal is deliberate: a warning printed above a lineup gets read after the
+lineup.
+
+`--sources` shows which sources survived and how old each is. A source past the
+limit is dropped rather than averaged in, so a five-source consensus can quietly
+become a two-source one — this is how you see that. `--min-sources 3` makes it
+an error instead.
+
+`--opponent <seat>` changes what "best" means: without it the lineup maximises
+projected points, with it it maximises your chance of beating that specific
+team. Those differ. Against a much stronger opponent it will start the volatile
+player over the steady one, because losing by less is still losing.
+
+If it refuses and you disagree, `--allow-stale` proceeds and prints exactly what
+it overrode.
+
+### Role changes — the thing projections are slowest on
+
+```bash
+python scripts/fetch_nflverse.py --season 2026        # weekly, after the games
+ffdraft lineup --league league2 --log logs/draft_league2.jsonl \
+    --weekly data/weekly_2026_w07.csv --week 7 --usage data/usage_2026.csv
+```
+
+Projections already handle injuries — the sites move a backup within hours of
+the news. What they are slow on is a role changing quietly: a back going 22% →
+44% → 61% of snaps with no announcement. This prints those, in both directions:
+
+```
+  role changes going into week 7
+   UP   Bucky Irving (RB, TB)      snaps 24% -> 62% over the last 2, targets 4% -> 9%
+   DOWN Rachaad White (RB, TB)     snaps 71% -> 30% over the last 2, targets 13% -> 8%
+```
+
+Read it and decide. `--usage-adjust` will nudge the projections for you, damped
+and capped at 25%, but the default is to show you the number and leave the call
+alone — the sites can see snap counts too, and you are not the only one who
+noticed.
 
 ---
 

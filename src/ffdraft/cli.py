@@ -189,6 +189,50 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def _run_stamp() -> str:
+    """A sortable per-run stamp for log filenames."""
+    from datetime import datetime
+
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _unique(path: Path) -> Path:
+    """The first free filename at or after `path`.
+
+    A timestamp alone is not enough: two mocks started inside the same second
+    produce the same name, and the second silently overwrites the first - which
+    is the bug this was meant to fix, just narrower.
+    """
+    if not path.exists():
+        return path
+    for n in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{n}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise SystemExit(f"cannot find a free filename near {path}")
+
+
+def _preserve(path: Path) -> Path | None:
+    """Move an existing non-empty log aside instead of truncating it.
+
+    Reopening the console on the same league pointed at the same default path,
+    which silently replaced the log of a draft that had already happened. A
+    pick log is the only record of the room and cannot be reconstructed
+    afterwards, so the cost of losing one is not symmetric with the cost of an
+    extra file.
+    """
+    # Not a byte count: `DraftLog.save` always writes a header line, so a log
+    # from a console that was opened and closed again is small but never zero.
+    # Backing that up would leave a trail of files holding nothing.
+    if not path.exists():
+        return None
+    if len([l for l in path.read_text().splitlines() if l.strip()]) <= 1:
+        return None
+    backup = _unique(path.with_name(f"{path.stem}.{_run_stamp()}{path.suffix}"))
+    path.rename(backup)
+    return backup
+
+
 # --- the live console --------------------------------------------------------
 HELP = """
   <number>          take that numbered player - the engine's 1/2/3 on your
@@ -199,6 +243,8 @@ HELP = """
   undo              take back the last pick
   log [n]           show the last n picks with their numbers
   fix <n> <name>    correct pick n (use when a name resolved to the wrong guy)
+  insert <n> <name> add a pick you missed at n; everything after shifts down
+  drop <n>          remove a pick that never happened; the rest shift up
   roster [seat]     show a roster
   board [pos]       show the best available
   out <name> : <r>  rule a player out for the season, with a reason
@@ -216,6 +262,7 @@ def cmd_draft(args) -> int:
     log = DraftLog(league_id=config.league_id, my_seat=config.my_seat)
     audit = AuditLog(args.audit) if args.audit else AuditLog()
     log_path = Path(args.out or f"logs/draft_{config.league_id}.jsonl")
+    moved = _preserve(log_path)
     state = DraftState(config=config, drafted=[], my_seat=config.my_seat)
 
     from .opponents import DraftSimulator
@@ -239,6 +286,8 @@ def cmd_draft(args) -> int:
               f"draft order is VOR rank.\n"
               f"           Survival % and the numbered list are approximate. "
               f"Run `ffdraft check` for the fix.")
+    if moved:
+        print(f"  kept the previous log as {moved}")
     print(f"pick log -> {log_path}")
     print(HELP)
 
@@ -347,6 +396,12 @@ def _shared_command(line, state, board, config, log, log_path, audit,
         return state, board, True, False
     if _word(lower, "fix"):
         state = _fix_pick(line, state, board, log, log_path)
+        return state, board, True, True
+    if _word(lower, "insert"):
+        state = _insert_pick(line, state, board, config, log, log_path)
+        return state, board, True, True
+    if _word(lower, "drop"):
+        state = _drop_pick(line, state, board, config, log, log_path)
         return state, board, True, True
     if _word(lower, "roster"):
         parts = line.split()
@@ -526,8 +581,12 @@ def _show_suggestions(simulator, board, config, state, n) -> list[int]:
           f"(type the number; {covered:.0%} of the time it is one of these)")
     for k, (idx, prob) in enumerate(rows, start=1):
         player = board.players[idx]
+        # A player who won none of 4,000 draws is not impossible, he is just
+        # under the resolution of the simulation. Printing 0% next to a name
+        # the console is actively offering reads as a bug.
+        shown = f"{prob:.0%}" if prob >= 0.005 else "<1%"
         print(f"   {k:>2}  {player.name[:24]:<25}{player.pos:<4}{player.team:<4}"
-              f"{prob:>6.0%}")
+              f"{shown:>6}")
     return [idx for idx, _ in rows]
 
 
@@ -580,6 +639,94 @@ def _fix_pick(line, state, board, log, log_path):
     log.save(log_path)
     print(f"  pick {number}: {board.player(was).display} -> "
           f"{resolution.best.display}")
+    return state
+
+
+def _renumber(log, state, config) -> None:
+    """Rewrite pick numbers and seats after an insert or a drop.
+
+    The seat that owns a pick is derived from its number, so shifting the log
+    re-attributes every pick after the shift. Recomputing the whole tail is
+    cheaper to reason about than patching the entries individually, and it
+    cannot drift out of step with `pick_owner`.
+    """
+    for n, pid in enumerate(state.drafted, start=1):
+        if n - 1 < len(log.picks):
+            entry = log.picks[n - 1]
+            entry.pick = n
+            entry.player_id = pid
+            entry.seat = pick_owner(n, config.teams, config.draft_type)
+
+
+def _insert_pick(line, state, board, config, log, log_path):
+    """`insert <pick number> <name>` - a pick that was missed at the time.
+
+    Everything from that number on shifts down one, which is the whole point:
+    a missed pick leaves the entire tail of the log attributed to the wrong
+    seats, and no amount of `fix` repairs that.
+    """
+    parts = line.split(None, 2)
+    if len(parts) < 3:
+        print("  ! usage: insert <pick number> <name>   (try `log` to find the number)")
+        return state
+    try:
+        number = int(parts[1])
+    except ValueError:
+        print(f"  ! {parts[1]!r} is not a pick number. Try `log` to find it.")
+        return state
+
+    resolution = board.resolver.resolve(parts[2])
+    if not resolution.found:
+        print(f"  ! {resolution.note}")
+        return state
+    if resolution.ambiguous:
+        print(f"  ! {resolution.note}")
+        print("    say which one - add the position (e.g. 'josh QB') "
+              "or type the full name")
+        return state
+
+    try:
+        state = state.insert(number, resolution.best.player_id)
+    except DraftStateError as exc:
+        print(f"  ! {exc}")
+        return state
+
+    log.append(state.drafted[-1], seat=0)
+    _renumber(log, state, config)
+    log.picks[number - 1].note = "inserted; later picks shifted down"
+    log.save(log_path)
+    seat = pick_owner(number, config.teams, config.draft_type)
+    print(f"  inserted at pick {number} (seat {seat}): {resolution.best.display}")
+    print(f"  {len(state.drafted) - number} later pick(s) shifted down one; "
+          f"pick {state.pick_number} is now on the clock")
+    return state
+
+
+def _drop_pick(line, state, board, config, log, log_path):
+    """`drop <pick number>` - a pick that never happened. The mirror of insert."""
+    parts = line.split()
+    if len(parts) < 2:
+        print("  ! usage: drop <pick number>   (try `log` to find the number)")
+        return state
+    try:
+        number = int(parts[1])
+    except ValueError:
+        print(f"  ! {parts[1]!r} is not a pick number. Try `log` to find it.")
+        return state
+
+    was = state.drafted[number - 1] if 1 <= number <= len(state.drafted) else None
+    try:
+        state = state.remove(number)
+    except DraftStateError as exc:
+        print(f"  ! {exc}")
+        return state
+
+    log.picks.pop()
+    _renumber(log, state, config)
+    log.save(log_path)
+    print(f"  removed pick {number}: {board.player(was).display}")
+    print(f"  later pick(s) shifted up one; pick {state.pick_number} is now "
+          f"on the clock")
     return state
 
 
@@ -692,6 +839,8 @@ MOCK_HELP = """
   undo              take back the last pick
   log [n]           show the last n picks with their numbers
   fix <n> <name>    correct pick n (use when a name resolved to the wrong guy)
+  insert <n> <name> add a pick you missed at n; everything after shifts down
+  drop <n>          remove a pick that never happened; the rest shift up
   roster [seat]     show a roster - yours, or any opponent's
   board [pos]       show the best available
   out <name> : <r>  rule a player out for the season, with a reason
@@ -728,7 +877,14 @@ def cmd_mock(args) -> int:
 
     audit = AuditLog(args.audit) if args.audit else AuditLog()
     log = DraftLog(league_id=config.league_id, my_seat=seat)
-    log_path = Path(args.out or f"logs/mock_{config.league_id}.jsonl")
+    # One file per run. A mock is something you do repeatedly to practise, so
+    # a fixed name meant every rehearsal overwrote the last one and there was
+    # nothing to compare against.
+    log_path = (
+        Path(args.out) if args.out
+        else _unique(Path(f"logs/mock_{config.league_id}_{_run_stamp()}.jsonl"))
+    )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     state = DraftState(config=config, drafted=[], my_seat=seat)
     auto = args.auto
 
@@ -846,6 +1002,84 @@ def _finish(board, state, config, log, log_path, stopped: bool) -> None:
     print("\n  This is practice. The projections are a point estimate and the")
     print("  season is mostly noise - do not read the total as a prediction.")
 
+
+
+def cmd_lineup(args) -> int:
+    """Set this week's lineup from fresh, multi-source weekly data."""
+    from .replay import DraftLog
+    from .weekly import (
+        StaleDataError, best_lineup, check_freshness, format_plan,
+        format_sources, load_weekly, roster_for,
+    )
+
+    config, board = _load(args)
+    log = DraftLog.load(args.log)
+    seat = args.seat or config.my_seat or log.my_seat
+    if seat is None:
+        raise SystemExit(
+            "cannot tell which seat is yours: pass --seat, or set draft.my_seat"
+        )
+
+    try:
+        data = load_weekly(
+            args.weekly, week=args.week, rules=config.scoring,
+            max_age_hours=args.max_age_hours,
+            min_sources=args.min_sources,
+        )
+    except StaleDataError as exc:
+        raise SystemExit(f"stale data: {exc}") from exc
+
+    roster = roster_for(config, log.player_ids, seat)
+    if args.sources:
+        print(format_sources(data))
+        print()
+    try:
+        notes = check_freshness(
+            data, args.week or data.week, roster,
+            max_age_hours=args.max_age_hours,
+            active_max_age_hours=args.active_max_age_hours,
+            allow_stale=args.allow_stale,
+        )
+    except StaleDataError as exc:
+        raise SystemExit(f"stale data: {exc}") from exc
+
+    if args.usage:
+        from .usage import (
+            apply_usage_adjustment, check_usage, format_trends, load_usage,
+            notable_trends,
+        )
+
+        usage = load_usage(args.usage, max_age_hours=args.usage_max_age_hours)
+        notes.extend(check_usage(usage, args.week or data.week))
+        trends = notable_trends(usage, roster, args.week or data.week)
+        print(format_trends(trends, board, args.week or data.week))
+        print()
+        if args.usage_adjust:
+            audit = AuditLog(args.audit) if args.audit else AuditLog()
+            notes.extend(apply_usage_adjustment(
+                data, usage, roster, args.week or data.week,
+                damping=args.usage_damping, cap=args.usage_cap,
+                league_id=config.league_id, audit=audit,
+            ))
+
+    opponent_roster = None
+    if args.opponent:
+        if not 1 <= args.opponent <= config.teams:
+            raise SystemExit(
+                f"seat {args.opponent} does not exist; this league has "
+                f"{config.teams} seats"
+            )
+        opponent_roster = roster_for(config, log.player_ids, args.opponent)
+
+    plan = best_lineup(
+        config, board, data, roster,
+        opponent_roster=opponent_roster,
+        opponent_seat=args.opponent,
+        n_sims=args.sims or 20000,
+        notes=notes,
+    )
+    print(format_plan(plan, board, data))
+    return 0
 
 
 def cmd_trades(args) -> int:
@@ -1290,6 +1524,43 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", help="where to write the mock pick log")
     p.add_argument("--audit", help="where to write the audit log")
     p.set_defaults(func=cmd_mock)
+
+    p = sub.add_parser("lineup", help="set this week's lineup from fresh weekly data")
+    common(p)
+    p.add_argument("--log", required=True, help="the pick log from the draft")
+    p.add_argument("--weekly", required=True,
+                   help="this week's projections (multi-source CSV)")
+    p.add_argument("--week", type=int, help="the week you are setting")
+    p.add_argument("--opponent", type=int,
+                   help="the seat you play this week; switches the objective "
+                        "from expected points to P(win)")
+    p.add_argument("--max-age-hours", type=float, default=24.0,
+                   help="a source older than this is dropped")
+    p.add_argument("--active-max-age-hours", type=float, default=3.0,
+                   help="tighter limit when a player you could start is "
+                        "questionable or doubtful")
+    p.add_argument("--min-sources", type=int, default=1,
+                   help="refuse if fewer than this many sources survive")
+    p.add_argument("--sources", action="store_true",
+                   help="print per-source coverage and age first")
+    p.add_argument("--allow-stale", action="store_true",
+                   help="override the freshness refusal, loudly")
+    p.add_argument("--usage",
+                   help="observed usage from scripts/fetch_nflverse.py; reports "
+                        "role changes the consensus may not have priced")
+    p.add_argument("--usage-adjust", action="store_true",
+                   help="also nudge projections toward observed usage "
+                        "(damped, capped, and written to the audit log)")
+    p.add_argument("--usage-damping", type=float, default=0.5,
+                   help="how much of the usage trend to apply; the consensus "
+                        "has already priced some of it")
+    p.add_argument("--usage-cap", type=float, default=0.25,
+                   help="largest multiplier the adjustment may apply")
+    p.add_argument("--usage-max-age-hours", type=float, default=72.0,
+                   help="nflverse publishes overnight, so this is looser than "
+                        "the projection bar")
+    p.add_argument("--audit", help="where to write the audit log")
+    p.set_defaults(func=cmd_lineup)
 
     p = sub.add_parser("trades", help="post-draft trade ideas, ranked by your title odds")
     common(p)
